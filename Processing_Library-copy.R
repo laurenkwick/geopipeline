@@ -1365,3 +1365,13 @@ fnf_df2 <- fst::read.fst(fnf_t1[2])
 # Generate SpatRasters
 fnf_rast1 <- terra::rast(fnf_t2[1])
 fnf_rast2 <- terra::rast(fnf_t2[2])
+
+##############
+# SOIL GRIDS #
+##############
+
+# Run module for point geometry: 
+soil_t1 <- soil_process(sf_point, radius=500, uniqueID="Id", soil_layers="nitrogen")
+
+# Run module for polygon geometry: 
+soil_t2 <- soil_process(sf_poly, soil_layers="ocs")
