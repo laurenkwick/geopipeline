@@ -16,6 +16,11 @@ library(units)
 library(pak)
 pak::pak("Permian-Global-Research/rsi")
 
+library(sys)
+library(getPass)
+library(httr)
+
+
 ####################################
 ####################################
 ##### Private Helper Functions #####
@@ -477,6 +482,119 @@ rast_reproject <- function(raster_layer, sf_layer) {
   
   return(rast_project)
 }
+
+gedi_finder <- function(product) {
+  # Define the base CMR granule search url, including the ORNL_CLOUD provider name and max page size
+  cmr <- "https://cmr.earthdata.nasa.gov/search/granules.json?pretty=true&provider=ORNL_CLOUD&page_size=2000&concept_id="
+  
+  # Set up list where key is GEDI shortname and value is CMR concept ID. 
+  # For now, we only have GEDI L3, but will potentially add GEDI L4B
+  concept_ids <- list('GEDI03' = 'C2153683336-ORNL_CLOUD')
+  
+  # CMR uses pagination for queries with more features returned than the page size. 
+  page <- 1
+  
+  # Initialize a list to store and append granule links
+  granules <- list() 
+  
+  # Send GET request to CMR granule search endpoint w/ product concept ID & page number
+  cmr_response <- httr::GET(sprintf('%s%s&pageNum=%s', cmr, concept_ids[[product]], page))
+  
+  # Verify if the request submission was successful
+  if (cmr_response$status_code==200) {
+    
+    # Send GET request to CMR granule search endpoint w/ product concept ID & page number
+    cmr_url <- sprintf("%s%s&pageNum=%s", cmr, concept_ids[[product]],page)
+    cmr_response <- content(GET(cmr_url))$feed$entry
+    
+    # If 2000 features are returned, move to the next page and submit another request, and append to the response
+    while(length(cmr_response) %% 2000 == 0){
+      page <- page + 1
+      cmr_url <- sprintf("%s%s&pageNum=%s", cmr, concept_ids[[product]],page)
+      cmr_response <- c(cmr_response, content(GET(cmr_url))$feed$entry)
+    }
+    
+    # CMR returns more info than just the Data Pool links, below use for loop to grab each DP link, and add to list
+    for (i in 1:length(cmr_response)) {
+      granules[[i]] <- cmr_response[[i]]$links[[1]]$href
+    }
+    
+    # Return the list of links
+    return(granules)
+  } else {
+    # If the request did not complete successfully, print out the response from CMR
+    print(content(GET(sprintf("%s%s&pageNum=%s", cmr, concept_ids[[product]],page)))$errors)
+  }
+}
+
+gedi_get_latest_data <- function(granules) {
+  # Subset output to last 5 granules (most recent datasets)
+  granules_5 <- granules[(length(granules)-4):length(granules)]
+  
+  # Transform from list to character vector
+  granules_chr <- as.character(granules_5)
+  
+  return(granules_chr)
+}
+
+# Define function to download data. 
+gedi_download <- function(files, netrc_path) {
+  # Initialize the file list
+  file_list <- NULL
+  
+  # Create a temporary directory
+  temp_dir <- tempdir()
+  
+  # Loop through each file URL
+  for (i in 1:length(files)) {
+    # Keep original file name
+    filename <- tail(strsplit(files[i], '/')[[1]], n=1) 
+    
+    # Define the full path for the file in the temp directory
+    full_path <- file.path(temp_dir, filename)
+    
+    # Write file to disk (authenticating with netrc) using the current directory/filename
+    response <- httr::GET(files[i], write_disk(full_path, overwrite=TRUE), progress(),
+                          config(netrc=TRUE, netrc_file=netrc_path), set_cookies("LC"="cookies"))
+    
+    # Check to see if file downloaded correctly
+    if (response$status_code == 200) {
+      print(sprintf("%s downloaded at %s", filename, temp_dir))
+      file_list <- c(file_list, full_path)
+    } else {
+      print(sprintf("%s not downloaded. Verify that your username and password are correct in %s", filename, netrc))
+    }
+  }
+  
+  return(file_list)
+}
+
+gedi_raster <- function(file_list) {
+  # Transform .tif files into one raster
+  gedi_rast <- terra::rast(file_list)
+  
+  return(gedi_rast)
+}
+
+gedi_reproject <- function(raster, aoi_layer) {
+  # Reproject AOI to match raster data CRS
+  aoi_reproject <- sf::st_transform(aoi_layer, terra::crs(raster))
+  
+  # Add small buffer to account for distances with reprojection. 
+  aoi_reproject_buffer <- sf::st_buffer(aoi_reproject, dist=50)
+  
+  # Crop the raster using the reprojected aoi
+  rast_crop <- terra::crop(raster, aoi_reproject_buffer)
+  
+  # Get the crs of the org sf object 
+  aoi_crs <- sf::st_crs(aoi_layer)$wkt
+  
+  # Reproject the raster to match the original aoi layer
+  rast_crop_proj <- terra::project(rast_crop, aoi_crs)
+  
+  return(rast_crop_proj)
+}
+
 
 
 #################################
@@ -1247,131 +1365,87 @@ soil_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, soil_layers) {
   
 }
 
-###################
-###################
-##### Testing #####
-###################
-###################
-
-# Set working directory
-setwd("~/ProcessingModule")
-
-# Create sf objects for testing:
-sf_point <- st_read("BraulioCarrillo.gpkg",layer="bioacoustic_plots")
-sf_poly <- st_read("BraulioCarrillo.gpkg", layer="study_area")
-
-sf_poly_lg <- st_read("BC_testc.gpkg", layer="large_aoi")
-
-##############
-# SENTINEL-2 #
-##############
-
-# Run module for point geometry:
-s2_t1 <- s2_process(sf_point, radius=100, start_dt="2023-01-01", end_dt="2023-01-15", uniqueID="Id",keep_SCL=TRUE,
-                    apply_mask = FALSE, idx_names=c("NDVI","ndkas","NDMI"), file_path = tempfile(pattern="s2_df_", tmpdir=tempdir()))
-s2_t1_scl <- s2_process(sf_point, radius=50, start_dt="2023-01-01", end_dt="2023-01-15", uniqueID="Id",keep_SCL=TRUE,
-                        apply_mask = FALSE, composite_method=NULL, idx_names="NDVI", file_path = tempfile(pattern="s2_df_", tmpdir=tempdir()))
-
-# Run module for polygon geometry:
-s2_t2 <- s2_process(sf_poly, start_dt="2023-01-01", end_dt="2023-01-15", idx_names="NDVI", file_path = tempfile(pattern="s2_tif_", tmpdir=tempdir()))
-
-# Read in the fst file
-s2_df_1 <- fst::read.fst(s2_t1[1])
-
-s2_df_scl_1 <- fst::read.fst(s2_t1_scl[1])
-s2_df_scl_2 <- fst::read.fst(s2_t1_scl[2])
-
-# Generate SpatRasters
-s2_rast_1 <- terra::rast(s2_t2[1])
-
-##############
-# SENTINEL-1 #
-##############
-
-# Run module for point geometry:
-s1_t1 <- s1_image(sf_point, radius=100, start_dt="2023-01-01", end_dt="2023-01-20", uniqueID="Id", composite_method="median",
-                  calc_dB=TRUE, file_path = tempfile(pattern="s1_df_", tmpdir=tempdir()))
-
-# Run module for polygon geometry:
-s1_t2 <- s1_image(sf_poly, start_dt="2023-01-01", end_dt="2023-01-15", calc_dB=TRUE,
-                  idx_names="NDPolI", file_path = tempfile(pattern="s1_tif_", tmpdir=tempdir()))
-
-s1_t2_lg <- s1_image(sf_poly_lg, start_dt="2023-01-01", end_dt="2023-01-15", calc_dB=TRUE, composite_method=NULL,
-                     idx_names="NDPolI", file_path = tempfile(pattern="s1_tif_", tmpdir=tempdir()))
-
-s1_lg1 <- terra::rast(s1_t2_lg[1])
-s1_lg2 <- terra::rast(s1_t2_lg[2])
-s1_lg3 <- terra::rast(s1_t2_lg[3])
-
-
-# Read in the fst file
-s1_df_1 <- fst::read.fst(s1_t1[1])
-s1_df_2 <- fst::read.fst(s1_t1[2])
-
-# Generate SpatRasters
-s1_rast_1 <- terra::rast(s1_t2[1])
-s1_rast_2 <- terra::rast(s1_t2[2])
-
-##################
-# COPERNICUS DEM #
-##################
-
-# Run module for point geometry:
-dem_t1 <- dem_process(sf_point, radius=100, uniqueID="Id", file_path = tempfile(pattern="dem_df_", tmpdir=tempdir()))
-
-# Run module for polygon geometry: 
-dem_t2 <- dem_process(sf_poly, file_path = tempfile(pattern="dem_tif_", tmpdir=tempdir()))
-
-# Read in the fst file
-dem_df <- fst::read.fst(dem_t1[1])
-
-# Generate SpatRasters
-dem_rast <- terra::rast(dem_t2)
-
-##################
-# ESA WORLDCOVER #
-##################
-
-# Run module for point geometry: 
-esa_t1 <- esa_worldcover_process(sf_point, radius=100, start_dt="2019-01-01", end_dt="2020-01-01", uniqueID="Id",
-                                 file_path=tempfile(pattern="esa_df_", tmpdir=tempdir()))
-
-# Run module for polygon geometry: 
-esa_t2 <- esa_worldcover_process(sf_poly, radius=200, start_dt="2019-01-01", end_dt="2022-01-01", uniqueID="Id",
-                                 file_path=tempfile(pattern="esa_tif_", tmpdir=tempdir()))
-
-# Read in the fst file:
-esa_df1 <- fst::read.fst(esa_t1[1])
-
-# Generate SpatRasters
-esa_rast1 <- terra::rast(esa_t2[1])
-esa_rast2 <- terra::rast(esa_t2[2])
-
-############################
-# ALOS FOREST / NON-FOREST #
-############################
-
-# Run module for point geometry: 
-fnf_t1 <- alos_fnf_process(sf_point, radius=100, start_dt="2015-01-01", 
-                           end_dt="2018-01-01", uniqueID="Id", file_path = tempfile(pattern="fnf_df_", tmpdir=tempdir()))
-
-# Run module for polygon geometry:
-fnf_t2 <- alos_fnf_process(sf_poly, start_dt="2015-01-01", end_dt="2018-01-01", file_path = tempfile(pattern="fnf_tif_", tmpdir=tempdir()))
-
-# Read in the fst files: 
-fnf_df1 <- fst::read.fst(fnf_t1[1])
-fnf_df2 <- fst::read.fst(fnf_t1[2])
-
-# Generate SpatRasters
-fnf_rast1 <- terra::rast(fnf_t2[1])
-fnf_rast2 <- terra::rast(fnf_t2[2])
-
-##############
-# SOIL GRIDS #
-##############
-
-# Run module for point geometry: 
-soil_t1 <- soil_process(sf_point, radius=500, uniqueID="Id", soil_layers="nitrogen")
-
-# Run module for polygon geometry: 
-soil_t2 <- soil_process(sf_poly, soil_layers="ocs")
+gedi_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, gedi_product='GEDI03', netrc_path) {
+  # scoping for aoi_layer
+  # Check for valid object type
+  if (!inherits(aoi_layer, "sf")) {
+    stop(deparse(substitute(aoi_layer)), " must be an sf object. \n")
+  }
+  
+  # Only include polygon and point geometry types
+  gtypes = c("POLYGON", "POINT")
+  if (!any(gtypes %in% unique(as.character(sf::st_geometry_type(aoi_layer))))) {
+    stop(deparse(substitute(aoi_layer)), " must be one of ", paste(gtypes, collapse=", "),". \n")
+  }
+  
+  # scoping for uniqueID
+  use_uniqueID <- NULL
+  use_uniqueID <- valid_col_ID(aoi=aoi_layer, column_ID=uniqueID)
+  
+  # scoping for GEDI product. Currently just GEDI03, but might incorporate more. 
+  valid_product <- "GEDI03"
+  if(!is.null(gedi_product[1])){
+    if (!gedi_product[1] %in% valid_product) {
+      stop(deparse(substitute(gedi_product[1])), " must be one of ", paste(valid_product, collapse=", "), ". \n")
+    }
+  }
+  
+  # Set up aoi search parameter to use in STAC search
+  aoi_search <- aoi_layer
+  
+  # Add a buffer to point geometries. Return new sf polygon layer.
+  if ("POINT" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
+    max_dist <- 1000
+    aoi_search <- point_buffer(aoi_layer, radius, max_dist)
+  }
+  
+  if ("POLYGON" %in%  unique(as.character(sf::st_geometry_type(aoi_layer))) && !is.null(radius)) {
+    message("`radius` ignored for POLYGON geometry type. \n")
+  }
+  
+  # Give warning message if aoi is very large
+  area_limit <- 5000000000
+  check_bbox_area(aoi_search, max_area = area_limit)
+  
+  # Run the gedi_finder function
+  granules <- gedi_finder(gedi_product)
+  
+  # Subset output to last 5 granules (most recent datasets)
+  granules_5 <- gedi_get_latest_data(granules)
+  
+  # Download the data: 
+  gedi_data <- gedi_download(granules_chr, netrc_path)
+  
+  # Transform .tif files into 1 raster
+  gedi_rast <- gedi_raster(gedi_data)
+  
+  # Reproject and crop
+  gedi_crop <- gedi_reproject(gedi_rast, sf_poly)
+  
+  file_nm <- NULL
+  
+  if ("POINT" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
+    # Extract pixel values
+    vals_df <- extract_vals_df(gedi_crop, aoi_search, use_uniqueID)
+    
+    # Write to fst
+    file_nm <- file.path(tempdir(), "gedi_df.fst")
+    fst::write_fst(vals_df, path=file_nm)
+    message("File saved to: ", file_nm)
+  }
+  
+  if ("POLYGON" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
+    # Write to GeoTIFF
+    file_nm <- file.path(tempdir(), "gedi_img.tif")
+    terra::writeRaster(gedi_crop, filename = file_nm,
+                       datatype="FLT4S", filetype="GTiff",
+                       gdal=c("COMPRESS=DEFLATE", "NUM_THREADS=ALL_CPUS", "PREDICTOR=2"),
+                       tempdir=tempdir(), NAflag=NA, verbose=FALSE)
+    
+    message("File saved to: ", file_nm)
+  }
+  
+  on.exit(file.remove(unlist(gedi_data)), add=TRUE)
+  return(file_nm)
+  
+}
