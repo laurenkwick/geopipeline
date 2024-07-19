@@ -308,7 +308,7 @@ s1_descending_query <- function(bbox,
   rstac::items_fetch(rstac::post_request(request))
 }
 
-s1_dB <- function(raster) {
+s1_dB <- function(raster, file_pth=NULL, counter=NULL) {
   # Create a copy of the raster to store the transformed values
   transformed_raster <- raster
 
@@ -320,8 +320,15 @@ s1_dB <- function(raster) {
 
   # Combine the two rasters so that we have backscatter data and dB
   combined <- c(raster, transformed_raster)
-
-  output_filename <- tempfile(pattern="dB_image", tmpdir=tempdir(), fileext=".tif")
+  
+  if (!is.null(file_pth)) {
+    output_filename <- paste0(file_pth,"_",counter, ".tif")
+  }
+  
+  if (is.null(file_pth)) {
+    output_filename <- tempfile(pattern="sentinel1_db_image", tmpdir=tempdir(), fileext=".tif")
+  }
+  
   w <- terra::writeRaster(combined, filename = output_filename,
                           datatype="FLT4S", filetype="GTiff",
                           gdal=c("COMPRESS=DEFLATE", "NUM_THREADS=ALL_CPUS", "PREDICTOR=2"),
@@ -922,16 +929,28 @@ s1_image <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
 
   for (i in 1:length(images_combined)) {
 
-    # Set value for Sentinel-2 band names and return a dataframe of indices to use IF user provides
-    # application domain or specific index names to search over. Otherwise, proceed with only spectral data.
+    # Set value for Sentinel-1 band names and return a dataframe of indices to use IF user provides
+    # application domain or specific index names to search over. Otherwise, proceed with only radar data.
     out_raster <- terra::rast(images_combined[i])
 
     if (!is.null(app_domains) | !is.null(idx_names)) {
       s1_vals <- names(out_raster)
       df_indices <- indices_df(band_names=s1_vals, index_application=app_domains, index_names=idx_names)
     }
-
-    if (calc_dB==TRUE) {
+    
+    if ((calc_dB==TRUE && is.null(df_indices)) | (calc_dB==TRUE && nrow(df_indices)==0)) {
+      images_combined[i] <- s1_dB(out_raster, file_pth=file_path, counter=i)
+    }
+    
+    if ((calc_dB==FALSE && is.null(df_indices)) | (calc_dB==FALSE && nrow(df_indices)==0)) {
+      images_combined[i] <- paste0(file_path, "_", i, ".tif")
+      w <- terra::writeRaster(out_raster, filename = images_combined[i],
+                              datatype="FLT4S", filetype="GTiff",
+                              gdal=c("COMPRESS=DEFLATE", "NUM_THREADS=ALL_CPUS", "PREDICTOR=2"),
+                              tempdir=tempdir(), NAflag=NA, verbose=FALSE)
+    }
+    
+    if ((calc_dB==TRUE && !is.null(df_indices)) && nrow(df_indices) > 0) {
       images_combined[i] <- s1_dB(out_raster)
     }
 
@@ -939,7 +958,7 @@ s1_image <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
     if (!is.null(df_indices)) {
       if (nrow(df_indices) > 0) {
         indices_image <- rsi::calculate_indices(raster = out_raster, indices = df_indices,
-                                                output_filename = tempfile(pattern="index_image", tmpdir=tempdir(), fileext=".tif"))
+                                                output_filename = tempfile(pattern="sentinel1_indices", tmpdir=tempdir(), fileext=".tif"))
 
         images_combined[i] <- rsi::stack_rasters(c(images_combined[i],indices_image), output_filename=paste0(file_path,"_",i,".tif"))
       }
