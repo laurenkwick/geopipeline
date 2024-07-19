@@ -89,7 +89,7 @@ valid_dates <- function(start_date, end_date){
   # raster - terra SpatRaster object
 # Value: character, File location where scaled GeoTIFF is stored.
 
-s2_scale <- function(raster) {
+s2_scale <- function(raster, file_pth=NULL, counter=NULL) {
   # Check if the "SCL" layer exists
   if ("SCL" %in% names(raster)) {
     # Identify the "SCL" layer index
@@ -111,8 +111,15 @@ s2_scale <- function(raster) {
       scaled_raster[[i]] <- raster[[i]] / 10000
     }
   }
+  
+  if (!is.null(file_pth)) {
+    output_filename <- paste0(file_pth,"_",counter, ".tif")
+  }
+  
+  if (is.null(file_pth)) {
+    output_filename <- tempfile(pattern="sentinel2_sr_image", tmpdir=tempdir(), fileext=".tif")
+  }
 
-  output_filename <- tempfile(pattern="SR_image", tmpdir=tempdir(), fileext=".tif")
   w <- terra::writeRaster(scaled_raster, filename = output_filename,
                           datatype="FLT4S", filetype="GTiff",
                           gdal=c("COMPRESS=DEFLATE", "NUM_THREADS=ALL_CPUS", "PREDICTOR=2"),
@@ -741,7 +748,7 @@ s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
       sign_function = attr(s2_asset, "sign_function"),
       mask_band = mask_layer,
       mask_function = mask_fxn,
-      output_filename = tempfile(pattern="S2img", tmpdir=tempdir(), fileext=".tif"),
+      output_filename = tempfile(pattern="sentinel2_image", tmpdir=tempdir(), fileext=".tif"),
       composite_function = composite_method[1],
       gdalwarp_options = c("-r", resample_method, "-multi", "-overwrite", "-co",
                            "COMPRESS=DEFLATE", "-co", "PREDICTOR=2", "-co", "NUM_THREADS=ALL_CPUS")
@@ -759,15 +766,17 @@ s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
   for (i in 1:length(image)) {
     # Convert image file into raster
     DN_raster <- terra::rast(image[i])
-
-    # Scale the data
-    SR_image <- s2_scale(DN_raster)
+    
+    if (is.null(df_indices)) {
+      SR_image <- s2_scale(DN_raster, file_pth=file_path, counter=i)
+    }
 
     # Add indices
     if (!is.null(df_indices)) {
+      SR_image <- s2_scale(DN_raster)
       if (nrow(df_indices) > 0) {
         indices_image <- rsi::calculate_indices(raster = SR_image, indices = df_indices,
-                                                output_filename = tempfile(pattern="index_image", tmpdir=tempdir(), fileext=".tif"))
+                                                output_filename = tempfile(pattern="sentinel2_indices", tmpdir=tempdir(), fileext=".tif"))
         SR_image <- rsi::stack_rasters(c(SR_image,indices_image), output_filename=paste0(file_path,"_",i,".tif"))
       }
     }
@@ -876,7 +885,7 @@ s1_image <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
       start_date = dates[1],
       end_date = dates[2],
       collection = rtc_collection,
-      output_filename = tempfile(pattern="S1img_asc", tmpdir=tempdir(), fileext=".tif"),
+      output_filename = tempfile(pattern="sentinel1_ascending", tmpdir=tempdir(), fileext=".tif"),
       query_function = s1_ascending_query,
       composite_function = composite_method[1],
       gdalwarp_options = c("-r", resample_method[1], "-multi", "-overwrite", "-co",
@@ -893,7 +902,7 @@ s1_image <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
       start_date = dates[1],
       end_date = dates[2],
       collection = rtc_collection,
-      output_filename = tempfile(pattern="S1img_des", tmpdir=tempdir(), fileext=".tif"),
+      output_filename = tempfile(pattern="sentinel1_descending", tmpdir=tempdir(), fileext=".tif"),
       query_function = s1_descending_query,
       composite_function = composite_method[1],
       gdalwarp_options = c("-r", resample_method[1], "-multi", "-overwrite", "-co",
@@ -1449,3 +1458,4 @@ gedi_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, gedi_product='GE
   return(file_nm)
   
 }
+
