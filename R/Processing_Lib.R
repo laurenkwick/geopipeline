@@ -1029,7 +1029,7 @@ dem_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, file_path) {
   image <- NULL
   
   # Set default image file name: 
-  image_file <- tempfile(pattern="dem_img", tmpdir=tempdir(), fileext=".tif")
+  image_file <- tempfile(pattern="dem_image", tmpdir=tempdir(), fileext=".tif")
   
   # Override image file name for polygon geometry
   if ("POLYGON" %in%  unique(as.character(sf::st_geometry_type(aoi_layer)))) {
@@ -1320,7 +1320,7 @@ alos_fnf_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=
   return(file_list)
 }
 
-soil_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, soil_layers) {
+soil_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, soil_layers, file_path) {
   
   # scoping for aoi_layer
   # Check for valid object type
@@ -1377,14 +1377,14 @@ soil_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, soil_layers) {
     vals_df <- extract_vals_df(soil_rast, aoi_search, use_uniqueID)
     
     # Write to fst
-    file_nm <- "testing_soil_df.fst"
+    file_nm <- paste0(file_path, ".fst")
     fst::write_fst(vals_df, path=file_nm)
     message("File saved to: ", file_nm)
   }
   
   # Save as .tif for polygon geometry. 
   if ("POLYGON" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
-    file_nm <- "testing_soil_img.tif"
+    file_nm <- paste0(file_path, ".tif")
     writeRaster(soil_rast, filename=file_nm)
     message("File saved to: ", file_nm)
   }
@@ -1393,7 +1393,7 @@ soil_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, soil_layers) {
   
 }
 
-gedi_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, gedi_product='GEDI03', netrc_path) {
+gedi_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, gedi_product='GEDI03', netrc_path, file_path) {
   # scoping for aoi_layer
   # Check for valid object type
   if (!inherits(aoi_layer, "sf")) {
@@ -1457,14 +1457,14 @@ gedi_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, gedi_product='GE
     vals_df <- extract_vals_df(gedi_crop, aoi_search, use_uniqueID)
     
     # Write to fst
-    file_nm <- file.path(tempdir(), "gedi_df.fst")
+    file_nm <- paste0(file_path, ".fst")
     fst::write_fst(vals_df, path=file_nm)
     message("File saved to: ", file_nm)
   }
   
   if ("POLYGON" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
     # Write to GeoTIFF
-    file_nm <- file.path(tempdir(), "gedi_img.tif")
+    file_nm <- paste0(file_path,".tif")
     terra::writeRaster(gedi_crop, filename = file_nm,
                        datatype="FLT4S", filetype="GTiff",
                        gdal=c("COMPRESS=DEFLATE", "NUM_THREADS=ALL_CPUS", "PREDICTOR=2"),
