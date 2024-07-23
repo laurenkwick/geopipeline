@@ -399,7 +399,7 @@ validate_soil_layers <- function(soil_layers) {
       stop("None of the values in soil_layers are valid. Valid values are: ",
            paste(valid_soil, collapse = ", "), ".")
     } else {
-      warning("The following values in soil_layers are invalid and will be ignored: ", 
+      message("The following values in soil_layers are invalid and will be ignored: ", 
               paste(invalid_soils, collapse = ", "))
     }
   }
@@ -794,20 +794,19 @@ s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, 
   # Check if user selected specific layers
   if (!is.null(layers_sel)) {
     if (!all(sapply(layers_sel, is.character))) {
-      stop("All elements in `layers_sel` must be character string.")
+      stop("All elements in `layers_sel` must be character strings.")
     }
     
-    layer_match <- NULL
     valid_layers <- c("blue", "coastal", "green", "nir", "nir08", "red", "rededge1", "rededge2", "rededge3", "swir16", "swir22")
-    for (i in 1:length(layers_sel)) {
-      if (layers_sel[i] %in% valid_layers) {
-        layer_match <- c(layer_match, layers_sel[i])
-      }
-    }
+    layer_match <- intersect(layers_sel, valid_layers)
     
-    layer_match <- unique(layer_match)
-    if (!is.null(layer_match)) {
+    if (length(layer_match) > 0) {
       s2_vals <- s2_vals[layer_match]
+      no_match_layer <- setdiff(layers_sel, layer_match)
+      if (length(no_match_layer) > 0) {
+        message("The following values in `layers_sel` are invalid and will be ignored: ", 
+                paste(no_match_layer, collapse = ", "),"\n")
+      }
     }
   }
 
