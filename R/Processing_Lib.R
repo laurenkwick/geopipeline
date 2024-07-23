@@ -378,19 +378,21 @@ check_date_in_range <- function(start_dt, end_dt, target_yr) {
 validate_soil_layers <- function(soil_layers) {
   # scoping for soil_layers
   valid_soil <- c("bdod", "cec", "cfvo", "clay", "nitrogen", 
-                  "ocd", "ocs", "phh2o", "sand", "silt", "soc")
+                  "ocd", "phh2o", "sand", "silt", "soc")
   
   if (is.null(soil_layers)) {
     stop("`soil_layers` parameter cannot be NULL")
   }
   
-  invalid_soils <- NULL
-  
-  for (i in 1:length(soil_layers)) {
-    if (!soil_layers[i] %in% valid_soil) {
-      invalid_soils <- c(invalid_soils, soil_layers[i])
-    }
+  if (length(soil_layers) == 0) {
+    stop("`soil_layers` cannot be empty.")
   }
+  
+  if (!all(sapply(soil_layers, is.character))) {
+    stop("All elements in `soil_layers` must be character string.")
+  }
+  
+  invalid_soils <- setdiff(soil_layers, valid_soil)
   
   if (length(invalid_soils) > 0) {
     if(length(invalid_soils) == length(soil_layers)) {
@@ -403,12 +405,25 @@ validate_soil_layers <- function(soil_layers) {
   }
   
   # Return valid soil layers
-  valid_soil_layers <- soil_layers[soil_layers %in% valid_soil]
+  valid_soil_layers <- unique(soil_layers[soil_layers %in% valid_soil])
   
-  return(unique(valid_soil_layers))
+  return(valid_soil_layers)
 }
 
 get_soil_data <- function(valid_soil_layers, bounding_box) {
+  # Error handling for `valid_soil_layers`
+  if (is.null(valid_soil_layers)) {
+    stop("`valid_soil_layers` parameter cannot be NULL")
+  }
+  
+  if (length(valid_soil_layers) == 0) {
+    stop("`valid_soil_layers` cannot be empty.")
+  }
+  
+  if (!all(sapply(valid_soil_layers, is.character))) {
+    stop("All elements in `valid_soil_layers` must be character string.")
+  }
+  
   # To download soil raster files for an AOI, the AOI layer needs to be reprojected. 
   # As the ISRIC layers use the Homolosine projection, we need to reproject the SF object:
   igh <- "+proj=igh +lat_0=0 +lon_0=0 +datum=WGS84 +units=m +no_defs"
@@ -438,8 +453,9 @@ get_soil_data <- function(valid_soil_layers, bounding_box) {
       # Check if temporary file can be created
       if (file.exists(soil_file)) {
         file.remove(soil_file)
+        message("Overwriting existing file: ", soil_file)
       }
-      
+
       # Try to excute the gdal-utils function and handle errors
       tryCatch({
         sf::gdal_utils(
@@ -457,6 +473,7 @@ get_soil_data <- function(valid_soil_layers, bounding_box) {
       })
     }
   }
+  
   return(file_list)
 }
 
@@ -505,6 +522,11 @@ gedi_finder <- function(product) {
   # For now, we only have GEDI L3, but will potentially add GEDI L4B
   concept_ids <- list('GEDI03' = 'C2153683336-ORNL_CLOUD')
   
+  # Check if the product is valid
+  if (!product %in% names(concept_ids)) {
+    stop("Invalid product name. Available products are: ", paste(names(concept_ids), collapse=","))
+  }
+  
   # CMR uses pagination for queries with more features returned than the page size. 
   page <- 1
   
@@ -542,6 +564,19 @@ gedi_finder <- function(product) {
 }
 
 gedi_get_latest_data <- function(granules) {
+  # Error checks
+  if (is.null(granules)) {
+    stop("`granules` input is NULL. Provide a valid list of granules.")
+  }
+  
+  if (!is.list(granules) || length(granules) == 0) {
+    stop("`granules` must be a non-empty list.")
+  }
+  
+  if (length(granules) < 5) {
+    stop("`granules` list has fewer than 5 elements.")
+  }
+  
   # Subset output to last 5 granules (most recent datasets)
   granules_5 <- granules[(length(granules)-4):length(granules)]
   
@@ -553,6 +588,16 @@ gedi_get_latest_data <- function(granules) {
 
 # Define function to download data. 
 gedi_download <- function(files, netrc_path) {
+  # Check for valid `files` input
+  if (is.null(files) || length(files) ==0) {
+    stop("The files input is NULL or empty. Provide a list of file URLs.")
+  }
+  
+  # Check for valid `netrc_path` input
+  if (!file.exists(netrc_path)) {
+    stop(sprintf("The netrc file at %s does not exist. Provide a valid path.", netrc_path))
+  }
+  
   # Initialize the file list
   file_list <- NULL
   
@@ -567,16 +612,28 @@ gedi_download <- function(files, netrc_path) {
     # Define the full path for the file in the temp directory
     full_path <- file.path(temp_dir, filename)
     
-    # Write file to disk (authenticating with netrc) using the current directory/filename
-    response <- httr::GET(files[i], write_disk(full_path, overwrite=TRUE), progress(),
-                          config(netrc=TRUE, netrc_file=netrc_path), set_cookies("LC"="cookies"))
+    # Write file to disk (authenticating with netrc) using current directory/filename
+    response <- tryCatch(
+      httr::GET(files[i], write_disk(full_path, overwrite=TRUE), progress(),
+                config(netrc=TRUE, netrc_file=netrc_path), set_cookies("LC"="cookies")),
+      error = function(e) {
+        warning(sprintf("Error occurred while downloading %s: %s", files[i], e$message))
+        return(NULL)
+      }
+    )
+    
+    # Check if the response is NULL (error occurred)
+    if (is.null(response)) {
+      next
+    }
     
     # Check to see if file downloaded correctly
     if (response$status_code == 200) {
-      print(sprintf("%s downloaded at %s", filename, temp_dir))
+      message(sprintf("%s downloaded at %s", filename, temp_dir))
       file_list <- c(file_list, full_path)
     } else {
-      print(sprintf("%s not downloaded. Verify that your username and password are correct in %s", filename, netrc))
+      print(sprintf("%s not downloaded. Verify that your username and password are correct in %s. Status code: %s", 
+                    filename, netrc_path, response$status_code))
     }
   }
   
@@ -585,28 +642,54 @@ gedi_download <- function(files, netrc_path) {
 
 gedi_raster <- function(file_list) {
   # Transform .tif files into one raster
-  gedi_rast <- terra::rast(file_list)
+  gedi_rast <- tryCatch({
+    terra::rast(file_list)
+  }, error = function(e) {
+    stop("An error occured while creating the raster: ", e$message)
+  })
   
   return(gedi_rast)
 }
 
 gedi_reproject <- function(raster, aoi_layer) {
-  # Reproject AOI to match raster data CRS
-  aoi_reproject <- sf::st_transform(aoi_layer, terra::crs(raster))
+  # Check if inputs are valid
+  if (!inherits(raster, "SpatRaster")) {
+    stop("The input raster is not a valid SpatRaster object.")
+  }
+
+  if (!inherits(aoi_layer, "sf")) {
+    stop("the input aoi_layer is not a valid sf object.")
+  }
+
+  # Check if the CRS is defined for both inputs:
+  if (is.null(terra::crs(raster))) {
+    stop("The raster object does not have a defined CRS.")
+  }
   
-  # Add small buffer to account for distances with reprojection. 
-  aoi_reproject_buffer <- sf::st_buffer(aoi_reproject, dist=50)
+  if (is.null(sf::st_crs(aoi_layer))) {
+    stop("The aoi_layer object does not have a defined CRS.")
+  }
   
-  # Crop the raster using the reprojected aoi
-  rast_crop <- terra::crop(raster, aoi_reproject_buffer)
-  
-  # Get the crs of the org sf object 
-  aoi_crs <- sf::st_crs(aoi_layer)$wkt
-  
-  # Reproject the raster to match the original aoi layer
-  rast_crop_proj <- terra::project(rast_crop, aoi_crs)
-  
-  return(rast_crop_proj)
+  tryCatch({
+    # Reproject AOI to match raster data CRS
+    aoi_reproject <- sf::st_transform(aoi_layer, terra::crs(raster))
+    
+    # Add small buffer to account for distances with reprojection. 
+    aoi_reproject_buffer <- sf::st_buffer(aoi_reproject, dist=50)
+    
+    # Crop the raster using the reprojected aoi
+    rast_crop <- terra::crop(raster, aoi_reproject_buffer)
+    
+    # Get the crs of the org sf object 
+    aoi_crs <- sf::st_crs(aoi_layer)$wkt
+    
+    # Reproject the raster to match the original aoi layer
+    rast_crop_proj <- terra::project(rast_crop, aoi_crs)
+    
+    return(rast_crop_proj)
+  }, error = function(e) {
+    stop("An error occurred during the reprojection process: ", e$message)
+  })
 }
 
 
