@@ -462,8 +462,8 @@ get_soil_data <- function(valid_soil_layers, bounding_box) {
           util="translate",
           source=paste0(sg_url, soil_datos),
           destination=soil_file,
-          options=c("-projwin", bounding_box, "-projwin_srs", igh),
-          quiet=FALSE
+          options=c("-projwin", bounding_box, "-projwin_srs", igh, "-q"),
+          quiet=TRUE
         )
         
         file_list <- c(file_list, soil_file)
@@ -614,7 +614,7 @@ gedi_download <- function(files, netrc_path) {
     
     # Write file to disk (authenticating with netrc) using current directory/filename
     response <- tryCatch(
-      httr::GET(files[i], write_disk(full_path, overwrite=TRUE), progress(),
+      httr::GET(files[i], write_disk(full_path, overwrite=TRUE),
                 config(netrc=TRUE, netrc_file=netrc_path), set_cookies("LC"="cookies")),
       error = function(e) {
         warning(sprintf("Error occurred while downloading %s: %s", files[i], e$message))
@@ -629,10 +629,9 @@ gedi_download <- function(files, netrc_path) {
     
     # Check to see if file downloaded correctly
     if (response$status_code == 200) {
-      message(sprintf("%s downloaded at %s", filename, temp_dir))
       file_list <- c(file_list, full_path)
     } else {
-      print(sprintf("%s not downloaded. Verify that your username and password are correct in %s. Status code: %s", 
+      message(sprintf("%s not downloaded. Verify that your username and password are correct in %s. Status code: %s", 
                     filename, netrc_path, response$status_code))
     }
   }
@@ -870,7 +869,7 @@ s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, 
   }
 
   file_list <- NULL
-
+  print(image)
   for (i in 1:length(image)) {
     # Convert image file into raster
     DN_raster <- terra::rast(image[i])
@@ -1543,7 +1542,7 @@ gedi_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, gedi_product='GE
   granules_5 <- gedi_get_latest_data(granules)
   
   # Download the data: 
-  gedi_data <- gedi_download(granules_chr, netrc_path)
+  gedi_data <- gedi_download(granules_5, netrc_path)
   
   # Transform .tif files into 1 raster
   gedi_rast <- gedi_raster(gedi_data)
