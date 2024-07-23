@@ -724,7 +724,7 @@ gedi_reproject <- function(raster, aoi_layer) {
     # not include the file extension in this variable, it will be added automatically.
 # Value: character vector of length 1 or greater. Each element is either an .fst or .tif file.
 
-s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
+s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, layers_sel=NULL,
                        composite_method=c("median", "mean", "sum", "min", "max", NULL),
                        resample_method=c("bilinear", "average", "rms", "nearest", "gauss", "cube", "cubicspline", "lanczos", "average_magphase", "mode"),
                        keep_SCL=FALSE, apply_mask=TRUE, app_domains=NULL, idx_names=NULL, file_path) {
@@ -787,10 +787,29 @@ s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
 
   # Set rsi band mapping object
   s2_asset <- rsi::sentinel2_band_mapping$aws_v1
-
-  # Define band mapping vector.
-  s2_vals <- c("B","A","G","N","N2","R","RE1","RE2","RE3","S1","S2")
-  names(s2_vals) <- c("blue", "coastal", "green", "nir", "nir08", "red", "rededge1", "rededge2", "rededge3", "swir16", "swir22")
+  
+  # Initialize sentinel-2 assets
+  s2_vals <- rsi::sentinel2_band_mapping$aws_v1
+  
+  # Check if user selected specific layers
+  if (!is.null(layers_sel)) {
+    if (!all(sapply(layers_sel, is.character))) {
+      stop("All elements in `layers_sel` must be character string.")
+    }
+    
+    layer_match <- NULL
+    valid_layers <- c("blue", "coastal", "green", "nir", "nir08", "red", "rededge1", "rededge2", "rededge3", "swir16", "swir22")
+    for (i in 1:length(layers_sel)) {
+      if (layers_sel[i] %in% valid_layers) {
+        layer_match <- c(layer_match, layers_sel[i])
+      }
+    }
+    
+    layer_match <- unique(layer_match)
+    if (!is.null(layer_match)) {
+      s2_vals <- s2_vals[layer_match]
+    }
+  }
 
   # Initialize a variable to store indices
   df_indices <- NULL
