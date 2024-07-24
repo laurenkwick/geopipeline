@@ -33,7 +33,7 @@ library(httr)
   # radius: numeric value specifying distance of buffer to apply.
 # Value: sf object with polygon geometry (if radius > 0). sf object with point geometry (if radius NULL)
 
-point_buffer <- function(boundary_layer, radius=NULL, max_radius) {
+point_buffer <- function(boundary_layer, radius=NULL, max_dist) {
   matching_layer <- boundary_layer
 
   # Check that radius argument is not null and is numerical
@@ -46,8 +46,8 @@ point_buffer <- function(boundary_layer, radius=NULL, max_radius) {
     return(matching_layer)
   }
 
-  if (radius > max_radius) {
-    warning(deparse(substitute(radius)), " exceeds ", max_radius, " m. Processing time and performance may be impacted. \n",
+  if (radius > max_dist) {
+    warning(deparse(substitute(radius)), " exceeds ", max_dist, " m. Processing time and performance may be impacted. \n",
             immediate. = TRUE)
   }
 
@@ -140,7 +140,11 @@ s2_scale <- function(raster, file_pth=NULL, counter=NULL) {
 # Value: data frame object containing list of indices that match user-specified search criteria and data set.
 
 indices_df <- function(band_names, index_application=NULL, index_names=NULL) {
-
+  
+  if (is.null(index_application) && is.null(index_names)) {
+    return(NULL)
+  }
+  
   # Return a data frame of spectral indices that match to Sentinel2 sensor and bands
   index_df <- rsi::spectral_indices() |>
     rsi::filter_bands(band_names)
@@ -262,6 +266,206 @@ valid_col_ID <- function(aoi, column_ID=NULL) {
 
   # If both criteria above are met, return TRUE. We will use the user-defined column_ID
   return(column_ID)
+}
+
+find_first_date <- function(start_date, 
+                            end_date,
+                            stac_search_fxn,
+                            aoi_search,
+                            band_mapping,
+                            layers_search) {
+  dates <- seq.Date(as.Date(start_date), as.Date(end_date), by="day")
+  #return(dates)
+  for (i in 1:length(dates)) {
+    date_start <- as.character(dates[i])
+    date_end <- as.character(dates[i]+1)
+    
+    # Call get_stac_data for the specific data
+    result <- try(stac_search_fxn(
+      aoi = aoi_search,
+      start_date = date_start,
+      end_date = date_end,
+      asset_names = layers_search,
+      stac_source = attr(band_mapping, "stac_source"),
+      collection = attr(band_mapping, "collection_name"),
+      query_function = attr(band_mapping, "query_function"),
+      download_function = attr(band_mapping, "download_function"),
+      sign_function = attr(band_mapping, "sign_function"),
+      mask_band = attr(band_mapping, "mask_band"),
+      mask_function = attr(band_mapping, "mask_function"),
+      output_filename = tempfile(pattern="date_test", tmpdir=tempdir(), fileext=".tif")
+    ), silent = TRUE)
+    
+    # Check if the result is successful
+    if (!inherits(result,"try-error") && length(result) > 0) {
+      return(as.character(dates[i]))
+    }
+  }
+  return(NULL)
+}
+
+
+validate_geometry <- function(aoi_layer) {
+  valid_types <- c("POLYGON", "POINT")
+  if (!inherits(aoi_layer, "sf") || !any(valid_types %in% unique(as.character(sf::st_geometry_type(aoi_layer))))) {
+    stop(deparse(substitute(aoi_layer)), " must be an sf object with ", paste(valid_types, collapse=", "), " geometry.\n")
+  }
+}
+
+validate_method <- function(method, valid_methods, param_name) {
+  if (!is.null(method) && !method[1] %in% valid_methods) {
+    stop(deparse(substitute(method)), " for ", param_name, " must be one of ", paste(valid_methods, collapes=", "), ".\n")
+  }
+}
+
+prepare_aoi <- function(aoi_layer, radius=NULL) {
+  aoi_search <- aoi_layer
+  if ("POINT" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
+    aoi_search <- point_buffer(aoi_layer, radius, max_dist=1000)
+  }
+  
+  if ("POLYGON" %in%  unique(as.character(sf::st_geometry_type(aoi_layer))) && !is.null(radius)) {
+    message("`radius` ignored for POLYGON geometry type. \n")
+  }
+  
+  check_bbox_area(aoi_search, max_area=5000000000)
+  return(aoi_search)
+}
+
+select_layers <- function(layer_list=NULL, band_mapping) {
+  # Initialize assets
+  layer_vals <- band_mapping
+  
+  # Check if user selected specific layers
+  if (!is.null(layer_list)) {
+    print(layer_list)
+    if (!all(sapply(layer_list, is.character))) {
+      stop("All elements in ", deparse(substitute(layer_list))," must be character strings.")
+    }
+    
+    valid_layers <- c("blue", "coastal", "green", "nir", "nir08", "red", "rededge1", "rededge2", "rededge3", "swir16", "swir22")
+    layer_match <- intersect(layer_list, valid_layers)
+    
+    if (length(layer_match) > 0) {
+      layer_vals <- layer_vals[layer_match]
+      no_match_layer <- setdiff(layer_list, layer_match)
+      if (length(no_match_layer) > 0) {
+        message("The following values in ", deparse(substitute(layer_list)), " are invalid and will be ignored: ", 
+                paste(no_match_layer, collapse = ", "),"\n")
+      }
+    }
+  }
+  return(layer_vals)
+}
+
+add_scl_layer <- function(keep_mask=FALSE, composite, layers) {
+  
+  if (keep_mask == TRUE && !is.null(composite)) {
+    message(deparse(substitute(keep_mask))," ignored when ", deparse(substitute(composite)), " is not `NULL`. \n")
+  }
+  
+  # Add SCL band if composite method is NULL and keep_mask is TRUE
+  if (keep_mask == TRUE && is.null(composite)) {
+    layers <- c(layers, scl="SCL")
+  }
+  
+  return(layers)
+}
+
+process_image_data <- function(stac_search_fxn,
+                               aoi,
+                               date_range,
+                               band_mapping,
+                               search_layers=band_mapping,
+                               mask_name=NULL,
+                               mask_function=NULL,
+                               composite="median",
+                               resample="bilinear",
+                               max_date_range=NULL,
+                               date_interval=NULL) {
+  
+  
+  # If composite_method is not NULL:
+  output_files <- NULL
+  
+  if (!is.null(composite)) {
+    tryCatch({
+      # Retrieve raster data
+      # Add a small buffer to aoi layer to get all pixels within the aoi boundary after reprojection (see rsi::get_stac_data help text)
+      output_files <- stac_search_fxn(
+        aoi = sf::st_buffer(aoi, dist=50),
+        start_date = date_range[1],
+        end_date = date_range[2],
+        asset_names = search_layers,
+        stac_source = attr(band_mapping, "stac_source"),
+        collection = attr(band_mapping, "collection_name"),
+        query_function = attr(band_mapping, "query_function"),
+        download_function = attr(band_mapping, "download_function"),
+        sign_function = attr(band_mapping, "sign_function"),
+        mask_band = mask_name,
+        mask_function = mask_function,
+        output_filename = tempfile(pattern=attr(band_mapping, "collection_name"), tmpdir=tempdir(), fileext=".tif"),
+        composite_function = composite,
+        gdalwarp_options = c("-r", resample, "-multi", "-overwrite", "-co",
+                             "COMPRESS=DEFLATE", "-co", "PREDICTOR=2", "-co", "NUM_THREADS=ALL_CPUS")
+      )
+    }, error = function(e) {
+      message("Error encountered: ", e$message)
+      message("No items were found for this combination of AOI and date range for ", attr(band_mapping, "collection_name"), ". \n")
+    })
+  }
+  
+  if (is.null(composite)) {
+    # Warning for long date range
+    if ((as.Date(date_range[2])-as.Date(date_range[1])) > max_date_range) { 
+      warning(deparse(substitute(composite))," is `NULL` and date range is greater than ", max_date_range, " days. Several files will be created which may impact processing time and performance. \n",
+              immediate. = TRUE)
+    }
+    
+    first_date <- find_first_date(start_date = date_range[1], 
+                                  end_date = date_range[2],
+                                  stac_search_fxn = stac_search_fxn,
+                                  aoi_search = aoi,
+                                  band_mapping = band_mapping,
+                                  layers_search = search_layers)
+    
+    if (!is.null(first_date)) {
+      date_sequence <- seq.Date(as.Date(first_date), as.Date(date_range[2]), by = paste(as.character(date_interval),"days"))
+      
+      tryCatch({
+        # Download data for each date in the sequence
+        output_files <- vapply(date_sequence,
+                               function(date) {
+                                 rsi::get_sentinel2_imagery(
+                                   aoi = sf::st_buffer(aoi, dist=50),
+                                   start_date = as.character(date),
+                                   end_date = as.character(date+(date_interval-1)),
+                                   asset_names = search_layers,
+                                   stac_source = attr(band_mapping, "stac_source"),
+                                   collection = attr(band_mapping, "collection_name"),
+                                   query_function = attr(band_mapping, "query_function"),
+                                   download_function = attr(band_mapping, "download_function"),
+                                   sign_function = attr(band_mapping, "sign_function"),
+                                   mask_band = mask_name,
+                                   mask_function = mask_function,
+                                   output_filename = file.path(tempdir(), glue::glue("{date}.tif")),
+                                   gdalwarp_options = c("-r", resample, "-multi", "-overwrite", "-co",
+                                                        "COMPRESS=DEFLATE", "-co", "PREDICTOR=2", "-co", "NUM_THREADS=ALL_CPUS")
+                                 )
+                               },
+                               character(1)
+        )
+      }, error = function(e) {
+        message("No items were found for this combination of AOI and date range for ", attr(band_mapping, "collection_name"), ". \n")
+      })
+    }
+  }
+  
+  if (is.null(output_files)) {
+    stop("No ", attr(band_mapping, "collection_name"), " items were found. \n")
+  }
+  
+  return(output_files)
 }
 
 s1_ascending_query <- function(bbox,
