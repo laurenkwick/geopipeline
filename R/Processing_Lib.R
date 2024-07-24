@@ -790,6 +790,17 @@ gedi_get_latest_data <- function(granules) {
   return(granules_chr)
 }
 
+gedi_raster <- function(file_list) {
+  # Transform .tif files into one raster
+  gedi_rast <- tryCatch({
+    terra::rast(file_list)
+  }, error = function(e) {
+    stop("An error occured while creating the raster: ", e$message)
+  })
+  
+  return(gedi_rast)
+}
+
 # Define function to download data. 
 gedi_download <- function(files, netrc_path) {
   # Check for valid `files` input
@@ -841,17 +852,6 @@ gedi_download <- function(files, netrc_path) {
   }
   
   return(file_list)
-}
-
-gedi_raster <- function(file_list) {
-  # Transform .tif files into one raster
-  gedi_rast <- tryCatch({
-    terra::rast(file_list)
-  }, error = function(e) {
-    stop("An error occured while creating the raster: ", e$message)
-  })
-  
-  return(gedi_rast)
 }
 
 gedi_reproject <- function(raster, aoi_layer) {
@@ -927,153 +927,57 @@ gedi_reproject <- function(raster, aoi_layer) {
     # not include the file extension in this variable, it will be added automatically.
 # Value: character vector of length 1 or greater. Each element is either an .fst or .tif file.
 
-s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, layers_sel=NULL,
-                       composite_method=c("median", "mean", "sum", "min", "max", NULL),
-                       resample_method=c("bilinear", "average", "rms", "nearest", "gauss", "cube", "cubicspline", "lanczos", "average_magphase", "mode"),
-                       keep_SCL=FALSE, apply_mask=TRUE, app_domains=NULL, idx_names=NULL, file_path) {
-
-  # scoping for aoi_layer
-  # Check for valid object type
-  if (!inherits(aoi_layer, "sf")) {
-    stop(deparse(substitute(aoi_layer)), " must be an sf object. \n")
-  }
-
-  # Only include polygon and point geometry types
-  gtypes = c("POLYGON", "POINT")
-  if (!any(gtypes %in% unique(as.character(sf::st_geometry_type(aoi_layer))))) {
-    stop(deparse(substitute(aoi_layer)), " must be one of ", paste(gtypes, collapse=", "),". \n")
-  }
-
-  # scoping for uniqueID
+s2_process_t2 <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, layers_sel=NULL,
+                          composite_method=c("median", "mean", "sum", "min", "max", NULL),
+                          resample_method=c("bilinear", "average", "rms", "nearest", "gauss", "cube", "cubicspline", "lanczos", "average_magphase", "mode"),
+                          keep_SCL=FALSE, apply_mask=TRUE, app_domains=NULL, idx_names=NULL, file_path) {
+  
+  # geometry & composite / resampling methods
+  validate_geometry(aoi_layer)
+  validate_method(composite_method, c("sum", "mean", "median", "min", "max"), "composite_method")
+  validate_method(resample_method, c("nearest", "average", "rms", "bilinear", "gauss", "cube", "cubicspline",
+                                     "lanczos", "average_magphase", "mode"), "resample_method")
+  # uniqueID
   use_uniqueID <- NULL
   use_uniqueID <- valid_col_ID(aoi=aoi_layer, column_ID=uniqueID)
-
-  # scoping for start_dt & end_dt
+  
+  # aoi_search for STAC query
+  aoi_search <- prepare_aoi(aoi_layer, radius)
+  
+  # date range
   dates <- valid_dates(start_dt, end_dt)
-
-  # scoping for composite_method.
-  valid_composite <- c("sum", "mean", "median", "min", "max")
-  if(!is.null(composite_method[1])){
-    if (!composite_method[1] %in% valid_composite) {
-      stop(deparse(substitute(composite_method[1])), " must be one of ", paste(valid_composite, collapse=", "), ". \n")
-    }
-  }
-
-  if (is.null(composite_method[1]) && ((as.Date(dates[2])-as.Date(dates[1]))) > 100) {
-    warning("`composite_method` is `NULL` and date range is greater than 100 days. Several files will be created which may impact processing time and performance. \n",
-            immediate. = TRUE)
-  }
-
-  # scoping for resample_method
-  valid_resample <- c("nearest", "average", "rms", "bilinear", "gauss", "cube", "cubicspline",
-                      "lanczos", "average_magphase", "mode")
-  if (!resample_method[1] %in% valid_resample) {
-    stop(deparse(substitute(resample_method[1])), " must be one of ", paste(valid_resample, collapse=", "), ". \n")
-  }
-
-  # Set up aoi search parameter to use in STAC search
-  aoi_search <- aoi_layer
-
-  # Add a buffer to point geometries. Return new sf polygon layer.
-  if ("POINT" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
-    max_dist <- 1000
-    aoi_search <- point_buffer(aoi_layer, radius, max_dist)
-  }
-
-  if ("POLYGON" %in%  unique(as.character(sf::st_geometry_type(aoi_layer))) && !is.null(radius)) {
-    message("`radius` ignored for POLYGON geometry type. \n")
-  }
-
-  # Give warning message if aoi is very large
-  area_limit <- 5000000000
-  check_bbox_area(aoi_search, max_area = area_limit)
-
+  
   # Set rsi band mapping object
   s2_asset <- rsi::sentinel2_band_mapping$aws_v1
+  s2_vals <- select_layers(layer_list=layers_sel, band_mapping=rsi::sentinel2_band_mapping$aws_v1)
   
-  # Initialize sentinel-2 assets
-  s2_vals <- rsi::sentinel2_band_mapping$aws_v1
+  # indices matching s2_vals
+  df_indices <- indices_df(band_names=s2_vals, index_application=app_domains, index_names=idx_names)
   
-  # Check if user selected specific layers
-  if (!is.null(layers_sel)) {
-    if (!all(sapply(layers_sel, is.character))) {
-      stop("All elements in `layers_sel` must be character strings.")
-    }
-    
-    valid_layers <- c("blue", "coastal", "green", "nir", "nir08", "red", "rededge1", "rededge2", "rededge3", "swir16", "swir22")
-    layer_match <- intersect(layers_sel, valid_layers)
-    
-    if (length(layer_match) > 0) {
-      s2_vals <- s2_vals[layer_match]
-      no_match_layer <- setdiff(layers_sel, layer_match)
-      if (length(no_match_layer) > 0) {
-        message("The following values in `layers_sel` are invalid and will be ignored: ", 
-                paste(no_match_layer, collapse = ", "),"\n")
-      }
-    }
-  }
-
-  # Initialize a variable to store indices
-  df_indices <- NULL
-
-  # Set value for Sentinel-2 band names and return a dataframe of indices to use IF user provides
-  # application domain or specific index names to search over. Otherwise, proceed with only spectral data.
-  if (!is.null(app_domains) | !is.null(idx_names)) {
-    df_indices <- indices_df(band_names=s2_vals, index_application=app_domains, index_names=idx_names)
-  }
-
-  if (keep_SCL == TRUE && !is.null(composite_method)) {
-    message("`keep_SCL` ignored when `composite_method` is not `NULL`. \n")
-  }
-
-  # Add SCL band if composite method is NULL and keep_SCL is TRUE
-  if (keep_SCL == TRUE && is.null(composite_method)) {
-    s2_vals <- c(s2_vals, scl="SCL")
-  }
-
-  # Initialize pixel masking variables
+  # add SCL layer and/or masks if specified
+  s2_vals <- add_scl_layer(keep_mask=keep_SCL, composite=composite_method[1], layers=s2_vals)
   mask_layer <- NULL
   mask_fxn <- NULL
-
-  # Define mask band and function if apply_mask = TRUE
   if (apply_mask == TRUE) {
     mask_layer <- attr(s2_asset, "mask_band")
     mask_fxn <- attr(s2_asset, "mask_function")
   }
-
+  
   # Initialize image variable
-  image <- NULL
-
-  tryCatch({
-    # Retrieve raster data
-    # Add a small buffer to aoi layer to get all pixels within the aoi boundary after reprojection (see rsi::get_stac_data help text)
-    image <- rsi::get_sentinel2_imagery(
-      aoi = sf::st_buffer(aoi_search, dist=50),
-      start_date = dates[1],
-      end_date = dates[2],
-      asset_names = s2_vals,
-      stac_source = attr(s2_asset, "stac_source"),
-      collection = attr(s2_asset, "collection_name"),
-      query_function = attr(s2_asset, "query_function"),
-      download_function = attr(s2_asset, "download_function"),
-      sign_function = attr(s2_asset, "sign_function"),
-      mask_band = mask_layer,
-      mask_function = mask_fxn,
-      output_filename = tempfile(pattern="sentinel2_image", tmpdir=tempdir(), fileext=".tif"),
-      composite_function = composite_method[1],
-      gdalwarp_options = c("-r", resample_method, "-multi", "-overwrite", "-co",
-                           "COMPRESS=DEFLATE", "-co", "PREDICTOR=2", "-co", "NUM_THREADS=ALL_CPUS")
-    )
-  }, error = function(e) {
-    message("No items were found for this combination of AOI and date range for Sentinel-2. \n")
-  })
-
-  if (is.null(image)) {
-    stop("No Sentinel-2 items were found. \n")
-  }
-
+  image <- process_image_data(stac_search_fxn = rsi::get_sentinel2_imagery,
+                              aoi=aoi_search,
+                              date_range=dates,
+                              band_mapping=rsi::sentinel2_band_mapping$aws_v1,
+                              search_layers=s2_vals,
+                              mask_name=mask_layer,
+                              mask_function=mask_fxn,
+                              composite=composite_method,
+                              resample=resample_method,
+                              max_date_range=100,
+                              date_interval=5)
+  
   file_list <- NULL
-  print(image)
+  
   for (i in 1:length(image)) {
     # Convert image file into raster
     DN_raster <- terra::rast(image[i])
@@ -1081,7 +985,7 @@ s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, 
     if (is.null(df_indices)) {
       SR_image <- s2_scale(DN_raster, file_pth=file_path, counter=i)
     }
-
+    
     # Add indices
     if (!is.null(df_indices)) {
       SR_image <- s2_scale(DN_raster)
@@ -1091,29 +995,29 @@ s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, 
         SR_image <- rsi::stack_rasters(c(SR_image,indices_image), output_filename=paste0(file_path,"_",i,".tif"))
       }
     }
-
+    
     # Initialize dataframe for extracting pixel values
     vals_df <- NULL
-
+    
     if ("POINT" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
       # Convert to raster and extract pixel values
       SR_raster <- terra::rast(SR_image)
       vals_df <- extract_vals_df(SR_raster, aoi_search, use_uniqueID)
-
+      
       # Write to fst
       file_nm <- paste0(file_path,"_",i,".fst")
       fst::write_fst(vals_df, path=file_nm)
       message("File saved to: ", file_nm)
       file_list <- append(file_list, file_nm)
     }
-
+    
     if ("POLYGON" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
       message("File saved to: ", SR_image)
       file_list <- append(file_list,SR_image)
     }
-
+    
   }
-
+  
   return(file_list)
 }
 
