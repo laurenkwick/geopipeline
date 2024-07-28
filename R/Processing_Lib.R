@@ -204,31 +204,35 @@ indices_df <- function(band_names, index_application=NULL, index_names=NULL) {
 # Value:
   # data frame containing spectral and index values.
 
-extract_vals_df <- function(raster, buffer_layer, col_ID=NULL) {
-
+extract_vals_df <- function(raster, buffer_layer, col_ID=NULL, file_name=NULL, add_dates=FALSE) {
+  
   # Update row.names to use user-defined column ID if populated
   if (!is.null(col_ID)) {
     row.names(buffer_layer) <- buffer_layer[[col_ID]]
   }
-
+  
   # Convert sf data.frame into a terra SpatVector object.
   layer_spatVect <- terra::vect(buffer_layer)
-
+  
   # Extract values from the raster for the set of locations.
   aoi_df <- terra::extract(raster, layer_spatVect)
-
+  
   # Create a mapping from polygon IDs to original row names
   id_to_rowname <- setNames(row.names(buffer_layer), 1:nrow(buffer_layer))
-
+  
   # Use original row names in output data frame:
   aoi_df$ID <- id_to_rowname[aoi_df$ID]
-
+  
+  if (isTRUE(add_dates)) {
+    colnames(aoi_df)[-1] <- paste(names(file_name), colnames(aoi_df)[-1], sep=" ")
+  }
+  
   # Print warning message of number of rows with miss values.
   # Exclude the geom column when checking for complete cases.
   if (sum(!complete.cases(aoi_df)) > 0) {
     message("There are ", sum(!complete.cases(aoi_df))," out of ", nrow(aoi_df), " rows with NA values. \n")
   }
-
+  
   return(aoi_df)
 }
 
@@ -318,6 +322,7 @@ validate_method <- function(method, valid_methods, param_name) {
   }
 }
 
+
 prepare_aoi <- function(aoi_layer, radius=NULL) {
   aoi_search <- aoi_layer
   if ("POINT" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
@@ -338,7 +343,6 @@ select_layers <- function(layer_list=NULL, band_mapping) {
   
   # Check if user selected specific layers
   if (!is.null(layer_list)) {
-    print(layer_list)
     if (!all(sapply(layer_list, is.character))) {
       stop("All elements in ", deparse(substitute(layer_list))," must be character strings.")
     }
@@ -413,6 +417,10 @@ process_image_data <- function(stac_search_fxn,
       message("Error encountered: ", e$message)
       message("No items were found for this combination of AOI and date range for ", attr(band_mapping, "collection_name"), ". \n")
     })
+    if (!is.null(output_files)) {
+      names(output_files) <- paste0(as.character(date_range[1]),"_",as.character(date_range[2]))
+    }
+    
   }
   
   if (is.null(composite)) {
@@ -436,7 +444,7 @@ process_image_data <- function(stac_search_fxn,
         # Download data for each date in the sequence
         output_files <- vapply(date_sequence,
                                function(date) {
-                                 rsi::get_sentinel2_imagery(
+                                 stac_search_fxn(
                                    aoi = sf::st_buffer(aoi, dist=50),
                                    start_date = as.character(date),
                                    end_date = as.character(date+(date_interval-1)),
@@ -458,6 +466,9 @@ process_image_data <- function(stac_search_fxn,
       }, error = function(e) {
         message("No items were found for this combination of AOI and date range for ", attr(band_mapping, "collection_name"), ". \n")
       })
+      if (!is.null(output_files)) {
+        names(output_files) <- as.character(date_sequence)
+      }
     }
   }
   
@@ -976,14 +987,20 @@ s2_process_t2 <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NUL
                               max_date_range=100,
                               date_interval=5)
   
+  
   file_list <- NULL
+  combined_df <- NULL
+  keep_dates <- FALSE
+  if (is.null(composite_method)) {
+    keep_dates <- TRUE
+  }
   
   for (i in 1:length(image)) {
     # Convert image file into raster
     DN_raster <- terra::rast(image[i])
     
     if (is.null(df_indices)) {
-      SR_image <- s2_scale(DN_raster, file_pth=file_path, counter=i)
+      SR_image <- s2_scale(DN_raster, file_pth=file_path, counter=names(image[i]))
     }
     
     # Add indices
@@ -992,7 +1009,7 @@ s2_process_t2 <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NUL
       if (nrow(df_indices) > 0) {
         indices_image <- rsi::calculate_indices(raster = SR_image, indices = df_indices,
                                                 output_filename = tempfile(pattern="sentinel2_indices", tmpdir=tempdir(), fileext=".tif"))
-        SR_image <- rsi::stack_rasters(c(SR_image,indices_image), output_filename=paste0(file_path,"_",i,".tif"))
+        SR_image <- rsi::stack_rasters(c(SR_image,indices_image), output_filename=paste0(file_path,"_",names(image[i]),".tif"))
       }
     }
     
@@ -1002,13 +1019,26 @@ s2_process_t2 <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NUL
     if ("POINT" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
       # Convert to raster and extract pixel values
       SR_raster <- terra::rast(SR_image)
-      vals_df <- extract_vals_df(SR_raster, aoi_search, use_uniqueID)
+      vals_df <- extract_vals_df(SR_raster, aoi_search, use_uniqueID, 
+                                 file_name=image[i], add_dates = keep_dates)
       
-      # Write to fst
-      file_nm <- paste0(file_path,"_",i,".fst")
-      fst::write_fst(vals_df, path=file_nm)
-      message("File saved to: ", file_nm)
-      file_list <- append(file_list, file_nm)
+      if (length(image)==1) {
+        # Write to fst
+        file_nm <- paste0(file_path, ".fst")
+        fst::write_fst(vals_df, path=file_nm)
+        message("File saved to: ", file_nm)
+        file_list <- file_nm
+      }
+      
+      if (length(image) > 1) {
+        if (i==1) {
+          combined_df <- vals_df
+        }
+        else {
+          combined_df <- cbind(combined_df, vals_df[-1])
+        }
+      }
+      
     }
     
     if ("POLYGON" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
@@ -1016,6 +1046,14 @@ s2_process_t2 <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NUL
       file_list <- append(file_list,SR_image)
     }
     
+  }
+  
+  # Write .fst for combined dataframe 
+  if (!is.null(combined_df)) {
+    file_nm <- paste0(file_path, ".fst")
+    fst::write_fst(combined_df, path=file_nm)
+    message("File saved to: ", file_nm)
+    file_list <- file_nm
   }
   
   return(file_list)
@@ -1656,7 +1694,7 @@ gedi_process <- function(aoi_layer, radius=NULL, uniqueID=NULL, gedi_product='GE
   gedi_rast <- gedi_raster(gedi_data)
   
   # Reproject and crop
-  gedi_crop <- gedi_reproject(gedi_rast, sf_poly)
+  gedi_crop <- gedi_reproject(gedi_rast, aoi_search)
   
   file_nm <- NULL
   
