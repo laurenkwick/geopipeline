@@ -1,0 +1,28 @@
+Package: geopipeline
+Title: Access and process geospatial data to be used in modeling workflows. 
+Version: 0.0.0.9000
+Authors@R: 
+    person("Lauren", "Wick", , "laurenkwick@gmail.com", role = c("aut", "cre"))
+Description: Builds off of the `rsi` package for accessing and preprocessing
+  specific geospatial datasets. Additional functionality includes output
+  dependency on area of interest (AOI) format; producing an .fst serialized 
+  data frame of values when POINT data is input, and producing GeoTIFF files
+  when POLYGON data is input. Additionally, spatial mosaicing is possible when 
+  temporal compositing is ignored. Most datasets are acquired and processed
+  through STAC APIs using `rsi` package functionality with the exception of GEDI 
+  L3 and ISRIC Soil Grids datasets. 
+License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
+    license
+Imports: 
+  fst,
+  httr,
+  rsi,
+  sf,
+  terra,
+  units
+Suggests:
+  getPass,
+  sys
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
