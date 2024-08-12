@@ -145,6 +145,11 @@ indices_df <- function(band_names, index_application=NULL, index_names=NULL) {
     return(NULL)
   }
   
+  # Check if "nir09" is in the band_names vector and remove it if present
+  if ("nir09" %in% names(band_names)) {
+    band_names <- band_names[names(band_names) != "nir09"]
+  }
+  
   # Return a data frame of spectral indices that match to Sentinel2 sensor and bands
   index_df <- rsi::spectral_indices() |>
     rsi::filter_bands(band_names)
@@ -439,31 +444,36 @@ process_image_data <- function(stac_search_fxn,
     
     if (!is.null(first_date)) {
       date_sequence <- seq.Date(as.Date(first_date), as.Date(date_range[2]), by = paste(as.character(date_interval),"days"))
-      
       tryCatch({
         # Download data for each date in the sequence
         output_files <- vapply(date_sequence,
                                function(date) {
-                                 stac_search_fxn(
-                                   aoi = sf::st_buffer(aoi, dist=50),
-                                   start_date = as.character(date),
-                                   end_date = as.character(date+(date_interval-1)),
-                                   asset_names = search_layers,
-                                   stac_source = attr(band_mapping, "stac_source"),
-                                   collection = attr(band_mapping, "collection_name"),
-                                   query_function = attr(band_mapping, "query_function"),
-                                   download_function = attr(band_mapping, "download_function"),
-                                   sign_function = attr(band_mapping, "sign_function"),
-                                   mask_band = mask_name,
-                                   mask_function = mask_function,
-                                   output_filename = file.path(tempdir(), glue::glue("{date}.tif")),
-                                   gdalwarp_options = c("-r", resample, "-multi", "-overwrite", "-co",
-                                                        "COMPRESS=DEFLATE", "-co", "PREDICTOR=2", "-co", "NUM_THREADS=ALL_CPUS")
-                                 )
-                               },
-                               character(1)
+                                 tryCatch({
+                                   stac_search_fxn(
+                                     aoi = sf::st_buffer(aoi, dist=50),
+                                     start_date = as.character(date),
+                                     end_date = as.character(date+(date_interval-1)),
+                                     asset_names = search_layers,
+                                     stac_source = attr(band_mapping, "stac_source"),
+                                     collection = attr(band_mapping, "collection_name"),
+                                     query_function = attr(band_mapping, "query_function"),
+                                     download_function = attr(band_mapping, "download_function"),
+                                     sign_function = attr(band_mapping, "sign_function"),
+                                     mask_band = mask_name,
+                                     mask_function = mask_function,
+                                     output_filename = file.path(tempdir(), glue::glue("{date}.tif")),
+                                     gdalwarp_options = c("-r", resample, "-multi", "-overwrite", "-co",
+                                                          "COMPRESS=DEFLATE", "-co", "PREDICTOR=2", "-co", "NUM_THREADS=ALL_CPUS")
+                                   )
+                                 }, error = function(e) {
+                                   message("No data found for ", date)
+                                   return("")
+                                 })
+                            
+                               }, character(1)
         )
       }, error = function(e) {
+        message("Error encountered: ", e$message)
         message("No items were found for this combination of AOI and date range for ", attr(band_mapping, "collection_name"), ". \n")
       })
       if (!is.null(output_files)) {
@@ -477,6 +487,25 @@ process_image_data <- function(stac_search_fxn,
   }
   
   return(output_files)
+}
+
+add_indices <- function(raster, file_name, count, indices_df) {
+  
+  # If no indices, scale data
+  if (is.null(indices_df)) {
+    out_image <- s2_scale(raster, file_pth=file_name, counter=count)
+  }
+  
+  # Add indices
+  if (!is.null(indices_df)) {
+    out_image <- s2_scale(raster)
+    if (nrow(indices_df) > 0) {
+      indices_image <- rsi::calculate_indices(raster=raster, indices=indices_df, output_filename=tempfile(pattern="sentinel2_indices", tmpdir=tempdir(), fileext=".tif"))
+      out_image <- rsi::stack_rasters(c(out_image, indices_image), output_filename=paste0(file_name,"_",count,".tif"))
+    }
+  }
+  
+  return(out_image)
 }
 
 s1_ascending_query <- function(bbox,
@@ -938,7 +967,7 @@ gedi_reproject <- function(raster, aoi_layer) {
     # not include the file extension in this variable, it will be added automatically.
 # Value: character vector of length 1 or greater. Each element is either an .fst or .tif file.
 
-s2_process_t2 <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, layers_sel=NULL,
+s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, layers_sel=NULL,
                           composite_method=c("median", "mean", "sum", "min", "max", NULL),
                           resample_method=c("bilinear", "average", "rms", "nearest", "gauss", "cube", "cubicspline", "lanczos", "average_magphase", "mode"),
                           keep_SCL=FALSE, apply_mask=TRUE, app_domains=NULL, idx_names=NULL, file_path) {
@@ -982,36 +1011,35 @@ s2_process_t2 <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NUL
                               search_layers=s2_vals,
                               mask_name=mask_layer,
                               mask_function=mask_fxn,
-                              composite=composite_method,
+                              composite=composite_method[1],
                               resample=resample_method,
                               max_date_range=100,
                               date_interval=5)
   
   
+  # Initialize the variable that will store the output files
   file_list <- NULL
+  
+  # Initialize the dataframe variable in the case that we extract values for multiple dates
   combined_df <- NULL
+  
+  # Initialize variable for keeping image dates 
   keep_dates <- FALSE
+  
+  # Preserve image dates if we are not temporally compositing images
   if (is.null(composite_method)) {
     keep_dates <- TRUE
   }
   
   for (i in 1:length(image)) {
+    if (image[i] == "")
+      next
+    
     # Convert image file into raster
     DN_raster <- terra::rast(image[i])
     
-    if (is.null(df_indices)) {
-      SR_image <- s2_scale(DN_raster, file_pth=file_path, counter=names(image[i]))
-    }
-    
-    # Add indices
-    if (!is.null(df_indices)) {
-      SR_image <- s2_scale(DN_raster)
-      if (nrow(df_indices) > 0) {
-        indices_image <- rsi::calculate_indices(raster = SR_image, indices = df_indices,
-                                                output_filename = tempfile(pattern="sentinel2_indices", tmpdir=tempdir(), fileext=".tif"))
-        SR_image <- rsi::stack_rasters(c(SR_image,indices_image), output_filename=paste0(file_path,"_",names(image[i]),".tif"))
-      }
-    }
+    # Convert to SR and calculate indices if applicable
+    SR_image <- add_indices(raster=DN_raster, file_name=file_path, count=names(image[i]), indices_df=df_indices)
     
     # Initialize dataframe for extracting pixel values
     vals_df <- NULL
