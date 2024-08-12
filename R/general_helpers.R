@@ -1,24 +1,3 @@
-# library(devtools)
-# create_package("C:/Users/laure/Documents/rrr/geopipeline")
-
-###############################
-###############################
-##### Dependent Libraries #####
-###############################
-###############################
-
-
-# library(rsi)
-library(sf)
-library(terra)
-library(fst)
-library(units)
-library(pak)
-pak::pak("Permian-Global-Research/rsi")
-
-library(sys)
-library(getPass)
-library(httr)
 
 
 ####################################
@@ -620,10 +599,10 @@ check_bbox_area <- function(sf_object, max_area) {
 
   # Calculate the area of the object
   area <- st_area(boundary)
-  area_sqm <- set_units(area, m^2)
+  area_sqm <- units::set_units(area, m^2)
 
   # Check if the area exceeds the max_area
-  if (area_sqm > set_units(max_area, m^2)) {
+  if (area_sqm > units::set_units(max_area, m^2)) {
     warning("The area of the AOI bounding box exceeds ", max_area, " sqm. Processing time and performance may be impacted. \n",
             immediate. = TRUE)
   }
