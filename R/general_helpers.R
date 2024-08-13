@@ -1,17 +1,16 @@
 
-
-####################################
-####################################
-##### Private Helper Functions #####
-####################################
-####################################
-
-# Description: Apply a buffer to sf point geometries and return an sf polygon object
-# Arguments:
-  # boundary_layer: sf object with POINT geometry type.
-  # radius: numeric value specifying distance of buffer to apply.
-# Value: sf object with polygon geometry (if radius > 0). sf object with point geometry (if radius NULL)
-
+#' Add buffer to sf layer
+#'
+#' @param boundary_layer object of class sf. in this package, sf object with point geometry
+#' @param radius a numeric value representing the distance (in meters) to apply a buffer 
+#' @param max_dist a numeric value representing the maximum distance which will throw a warning
+#'
+#' @return object of class sf with polygon geometry
+#' @export
+#'
+#' @examples
+#' point_buffer(sf_point, 100, 1000)
+#' point_buffer(sf_point, 501, 500)
 point_buffer <- function(boundary_layer, radius=NULL, max_dist) {
   matching_layer <- boundary_layer
 
@@ -36,12 +35,16 @@ point_buffer <- function(boundary_layer, radius=NULL, max_dist) {
   return(matching_layer)
 }
 
-# Description: Validate user-specified start and end dates for searching over STAC data.
-# Arguments:
-  # start_date - character representing date in format "YYYY-MM-DD"
-  # end_date - character representing date in format "YYYY-MM-DD"
-# Value: character vector of length 2 containing start date and end date to be used in get_stac_data search.
-
+#' Validate date range
+#'
+#' @param start_date character representing start date in format "YYYY-MM-DD"
+#' @param end_date character representing end date in format "YYYY-MM-DD"
+#'
+#' @return character vector of length 2 containing start date and end date to be used in stac query
+#' @export
+#'
+#' @examples
+#' valid_dates("2020-01-01","2020-12-31")
 valid_dates <- function(start_date, end_date){
   # Try to convert the input strings into dates
   start_date_converted <- try(as.Date(start_date, format = "%Y-%m-%d"), silent=TRUE)
@@ -63,11 +66,17 @@ valid_dates <- function(start_date, end_date){
   return(c(start_date, end_date))
 }
 
-# Description: Apply Sentinel-2 DN to SR (surface reflectance) conversion.
-# Arguments:
-  # raster - terra SpatRaster object
-# Value: character, File location where scaled GeoTIFF is stored.
-
+#' Apply Sentinel-2 L2A surface reflectance conversion
+#'
+#' @param raster a terra SpatRaster object 
+#' @param file_pth character representing file path to save output file to, should not include file extension
+#' @param counter character to append on the end of the file name in the case of multiple images
+#'
+#' @return character representing the output file path
+#' @export
+#'
+#' @examples
+#' s2_scale(raster_data, file_pth="exfolder/exfile")
 s2_scale <- function(raster, file_pth=NULL, counter=NULL) {
   # Check if the "SCL" layer exists
   if ("SCL" %in% names(raster)) {
@@ -118,6 +127,19 @@ s2_scale <- function(raster, file_pth=NULL, counter=NULL) {
     # the ASI repository.
 # Value: data frame object containing list of indices that match user-specified search criteria and data set.
 
+
+#' Generate data frame of indices to calculate
+#'
+#' @param band_names character of length > 0. Band names as required by the Awesome Spectral Indices (ASI) repository.
+#' @param index_application character vector specifying application domains to include in calculations. this value
+#' is based on the application_domain column from the ASI repository.
+#' @param index_names character vector specifying index names to calculate. This value is based on the
+#' short_name column from the ASI repository. 
+#'
+#' @return data frame object containing list of indices that match user-specified search criteria and band names
+#' @export
+#'
+#' @examples
 indices_df <- function(band_names, index_application=NULL, index_names=NULL) {
   
   if (is.null(index_application) && is.null(index_names)) {
@@ -177,17 +199,18 @@ indices_df <- function(band_names, index_application=NULL, index_names=NULL) {
   return(selection_df)
 }
 
-# Description: Extract spectral and index values for point geometries with a specified buffer. Returns
-  # a data.frame object with column corresponding to spectral and index values and rows corresponding to
-  # pixels.
-# Arguments:
-  # raster - terra SpatRaster object to extract values from
-  # buffer_layer - sf object with polygon geometry type.
-  # point_layer - sf object with point geometry type. buffer_layer was derived from this layer, via the
-    # point_buffer function.
-# Value:
-  # data frame containing spectral and index values.
-
+#' Extract values from raster based on sf geometry
+#'
+#' @param raster a terra SpatRaster object. 
+#' @param buffer_layer an sf object
+#' @param col_ID a field from the sf object representing a unique ID
+#' @param file_name a named character vector that stores the file path and the date of acquisition for a .tif file. 
+#' @param add_dates logical value representing if date of acquisition should be appended to column names of output dataframe
+#'
+#' @return data frame object containing raster values. 
+#' @export
+#'
+#' @examples
 extract_vals_df <- function(raster, buffer_layer, col_ID=NULL, file_name=NULL, add_dates=FALSE) {
   
   # Update row.names to use user-defined column ID if populated
@@ -220,6 +243,15 @@ extract_vals_df <- function(raster, buffer_layer, col_ID=NULL, file_name=NULL, a
   return(aoi_df)
 }
 
+#' Validate sf column ID
+#'
+#' @param aoi an sf object
+#' @param column_ID the field from the sf object to use as a unique ID
+#'
+#' @return character representing unique column ID from sf object. 
+#' @export
+#'
+#' @examples
 valid_col_ID <- function(aoi, column_ID=NULL) {
 
   # Message for no column_ID provided.
@@ -256,6 +288,19 @@ valid_col_ID <- function(aoi, column_ID=NULL) {
   return(column_ID)
 }
 
+#' Find date of first image within a date range
+#'
+#' @param start_date character representing start date in format "YYYY-MM-DD"
+#' @param end_date character representing end date in format "YYYY-MM-DD"
+#' @param stac_search_fxn one of the `get_stac_data` functions from the rsi package
+#' @param aoi_search an sf object
+#' @param band_mapping an rsi band mapping object
+#' @param layers_search either an rsi band mapping object or character vector specifying image assets to keep
+#'
+#' @return the first date within the date range that an image is captured, if successful
+#' @export
+#'
+#' @examples
 find_first_date <- function(start_date, 
                             end_date,
                             stac_search_fxn,
@@ -300,6 +345,16 @@ validate_geometry <- function(aoi_layer) {
   }
 }
 
+#' Generic method validation
+#'
+#' @param method character representing user-defined method
+#' @param valid_methods character vector representing valid methods
+#' @param param_name the name of the parameter to be used in output error message
+#'
+#' @return
+#' @export
+#'
+#' @examples
 validate_method <- function(method, valid_methods, param_name) {
   if (!is.null(method) && !method[1] %in% valid_methods) {
     stop(deparse(substitute(method)), " for ", param_name, " must be one of ", paste(valid_methods, collapes=", "), ".\n")
@@ -307,6 +362,15 @@ validate_method <- function(method, valid_methods, param_name) {
 }
 
 
+#' Prepare area of interest for STAC query
+#'
+#' @param aoi_layer an sf object
+#' @param radius a numeric value representing the distance (in meters) to apply a buffer 
+#'
+#' @return an sf object
+#' @export
+#'
+#' @examples
 prepare_aoi <- function(aoi_layer, radius=NULL) {
   aoi_search <- aoi_layer
   if ("POINT" %in% unique(as.character(sf::st_geometry_type(aoi_layer)))) {
@@ -321,6 +385,15 @@ prepare_aoi <- function(aoi_layer, radius=NULL) {
   return(aoi_search)
 }
 
+#' Select layers to return from STAC query
+#'
+#' @param layer_list character vector representing layers to return in STAC query
+#' @param band_mapping an rsi band mapping object
+#'
+#' @return an rsi band mapping object
+#' @export
+#'
+#' @examples
 select_layers <- function(layer_list=NULL, band_mapping) {
   # Initialize assets
   layer_vals <- band_mapping
@@ -346,6 +419,16 @@ select_layers <- function(layer_list=NULL, band_mapping) {
   return(layer_vals)
 }
 
+#' Add scene classification layer
+#'
+#' @param keep_mask logical representing if scene classification layer should be returned in STAC query
+#' @param composite character representing compositing method to apply in STAC query
+#' @param layers an rsi band mapping object
+#'
+#' @return an rsi band mapping object
+#' @export
+#'
+#' @examples
 add_scl_layer <- function(keep_mask=FALSE, composite, layers) {
   
   if (keep_mask == TRUE && !is.null(composite)) {
@@ -360,6 +443,28 @@ add_scl_layer <- function(keep_mask=FALSE, composite, layers) {
   return(layers)
 }
 
+#' Generic image processing function
+#'
+#' @param stac_search_fxn one of the `get_stac_data` functions from rsi package
+#' @param aoi an sf object 
+#' @param date_range a character vector containing a validated date range
+#' @param band_mapping an rsi band mapping object
+#' @param search_layers an rsi band mapping object
+#' @param mask_name the name of the image layer to use for masking
+#' @param mask_function the function to use to apply mask to image
+#' @param composite character representing image compositing method
+#' @param resample character representing image resampling method
+#' @param max_date_range numeric representing maximum number of days within date range,
+#' used to return a warning message
+#' @param date_interval interval at which images from a sensor are captured, for example,
+#' Sentinel-2 images are captured every 5 days.
+#'
+#' @return a named character vector where each element is a file name containing output .tif file
+#' and each element name is either the date of image acquisition (when composite is NULL) or the date
+#' range of image acquisition (when composite is not NULL)
+#' @export
+#'
+#' @examples
 process_image_data <- function(stac_search_fxn,
                                aoi,
                                date_range,
@@ -468,6 +573,17 @@ process_image_data <- function(stac_search_fxn,
   return(output_files)
 }
 
+#' Calculate indices and raster stack
+#'
+#' @param raster a terra SpatRaster object
+#' @param file_name output file path for saving image file, should not include file extension
+#' @param count character to append on the end of the file name in the case of multiple images
+#' @param indices_df data frame object containing list of indices that match user-specified search criteria and band names
+#'
+#' @return ouput file path containing image file
+#' @export
+#'
+#' @examples
 add_indices <- function(raster, file_name, count, indices_df) {
   
   # If no indices, scale data
@@ -485,35 +601,6 @@ add_indices <- function(raster, file_name, count, indices_df) {
   }
   
   return(out_image)
-}
-
-df_out <- function(num_images, file_name, values_df, count) {
-  # Write as fst file if only one image 
-  if (num_images==1) {
-    file_nm <- paste0(file_name, ".fst")
-    fst::write_fst(values_df, path=file_nm)
-    message("File saved to: ", file_nm)
-    file_list <- file_nm
-  }
-  
-  # Combine data frames for separate dates and write as fst file
-  if (num_images > 1) {
-    if (count==1) {
-      combined_df <- values_df
-    }
-    else {
-      combined_df <- cbind(combined_df, vals_df[-1])
-    }
-  }
-  
-  if (count==num_images && !is.null(combined_df)) {
-    file_nm <- paste0(file_name, ".fst")
-    fst::write_fst(combined_df, path=file_nm)
-    message("File saved to: ", file_nm)
-    file_list <- file_nm
-  }
-  
-  return(file_list)
 }
 
 s1_ascending_query <- function(bbox,
@@ -560,6 +647,16 @@ s1_descending_query <- function(bbox,
   rstac::items_fetch(rstac::post_request(request))
 }
 
+#' Apply backscatter to dB calulcation
+#'
+#' @param raster a terra SpatRaster object 
+#' @param file_pth output file path to save .tif image to
+#' @param counter character to append on the end of the file name in the case of multiple images
+#'
+#' @return ouput file path containing image file
+#' @export
+#'
+#' @examples
 s1_dB <- function(raster, file_pth=NULL, counter=NULL) {
   # Create a copy of the raster to store the transformed values
   transformed_raster <- raster
@@ -589,6 +686,15 @@ s1_dB <- function(raster, file_pth=NULL, counter=NULL) {
   return(output_filename)
 }
 
+#' Check area of interest size
+#'
+#' @param sf_object an sf object
+#' @param max_area a numeric value representing maximum area in m^2 to throw a warning message
+#'
+#' @return
+#' @export
+#'
+#' @examples
 check_bbox_area <- function(sf_object, max_area) {
 
   # Grab the bounding box of the AOI layer
@@ -609,6 +715,16 @@ check_bbox_area <- function(sf_object, max_area) {
 
 }
 
+#' Check year of interest within date range
+#'
+#' @param start_dt character representing start date in format "YYYY-MM-DD"
+#' @param end_dt character representing end date in format "YYYY-MM-DD"
+#' @param target_yr character representing a year in format "YYYY"
+#'
+#' @return character vector representing the target search range 
+#' @export
+#'
+#' @examples
 check_date_in_range <- function(start_dt, end_dt, target_yr) {
   # Convert the input strings to Date objects
   start_date <- as.Date(start_dt)
