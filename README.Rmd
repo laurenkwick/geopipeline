@@ -35,12 +35,12 @@ There are currently 7 core functions in geopipeline that can return data frame o
 6. `soil_process` - ISRIC Soil Grids
 7. `gedi_process` - GEDI L3
 
-I would like to specifically acknowledge and cite the `rsi` package from Permian-Global-Research (https://github.com/Permian-Global-Research/rsi/tree/main) which is the foundation for accessing, processing, and calculating indices for the first 5 datasets listed above. That package is truly incredible and has made working on this project much easier! Additional functionality I have built on top of `rsi` for the intended modeling use case of geopipeline includes: 
+I would like to specifically acknowledge and cite the `rsi` package from [Permian-Global-Research](https://github.com/Permian-Global-Research/rsi/tree/main) which is the foundation for accessing, processing, and calculating indices for the first 5 datasets listed above. That package is truly incredible and has made working on this project much easier! Additional functionality I have built on top of `rsi` for the intended modeling use case of geopipeline includes: 
 
 * Creating a data frame output for regions of interest based on point geometries
 * Adding the ability to spatially mosaic neighboring image tiles when temporal compositing is not applied for both Sentinel-2 L2A data and Sentinel-1 RTC GRD data.
 
-Still to come: 
+*Still to come:* 
 
 * A quick function for stacking and labeling non-composited images covering the same spatial extent.
 * A function for summarizing pixel values within a buffer based on a user-defined formula. 
@@ -57,7 +57,7 @@ devtools::install_github("laurenkwick/geopipeline")
 
 ## Example
 
-Begin by loading example data. In this example, the region of interest is the George W Mead Wildlife Area in Wisconsin. The point data includes fires that recently occurred within the wildlife area.
+Begin by loading example data. In this example, the region of interest is the George W Mead Wildlife Area in Wisconsin. The point data includes fires that recently occurred within the wildlife area. Data for this example was acquired from [GeoData@Wisconsin](https://geodata.wisc.edu/)
 
 ```{r load_shp_files}
 library(geopipeline)
@@ -65,6 +65,9 @@ library(geopipeline)
 sf_point <- sf::st_read("~/ProcessingModule/national_forest_data/mead_fires.shp")
 sf_poly <- sf::st_read("~/ProcessingModule/national_forest_data/mead_boundary.shp", type = 3)
 ```
+
+### July - Temporal Compositing
+
 We will use s2_process to return a GeoTIFF for the region of interest and a data frame containing values for our specific points of interest. 
 
 ```{r run_composites}
@@ -76,23 +79,77 @@ s2_composite_im <- s2_process(sf_poly, start_dt = "2024-07-01", end_dt = "2024-0
 
 # Point data
 s2_composite_df <- s2_process(sf_point, start_dt = "2024-07-01", end_dt = "2024-07-31",
-                              uniqueID = "FIRE_ID",
-                              layers_sel = c("red", "nir"), 
+                              uniqueID = "FIRE_ID", layers_sel = c("red", "nir"), 
                               composite_method = "median", idx_names = "NDVI",
                               file_path = tempfile(pattern="s2_composite_df", tmpdir=tempdir()))
 ```
 Plot the image: 
-```{r plot_composites}
+
+```{r plot_composites, echo=FALSE}
+# Plot
 terra::plot(terra::rast(s2_composite_im))
 ```
+View the data frame. In geopipeline, data frames are serialized as an fst file by default, because they can very quickly become very large. To read in the data frame, use `fst::read_fst()`: 
 
-
-You'll still need to render `README.Rmd` regularly, to keep `README.md` up-to-date. `devtools::build_readme()` is handy for this.
-
-You can also embed plots, for example:
-
-```{r pressure, echo = FALSE}
-plot(pressure)
+```{r df_composite}
+# Data frame
+s2_df_composite <- fst::read_fst(s2_composite_df)
+head(s2_df_composite)
 ```
 
-In that case, don't forget to commit and push the resulting figure files, so they display on GitHub and CRAN.
+IDs in the data frame "ID" column correspond to the ID from our original shapefile attribute table, which we specified in the `s2_process` function using `uniqueID = "FIRED_ID"`. In the previous example, we have one pixel (or one row) per point in our original shapefile. In this next example, we will use the `radius` argument to grab all pixels that fall within a 100m distance to each point:
+
+```{r composite_with_radius}
+# Run s2_process
+s2_composite_radius_df <- s2_process(sf_point, radius = 100, start_dt = "2024-07-01", end_dt = "2024-07-31",
+                                     uniqueID = "FIRE_ID", layers_sel = c("red", "nir"), 
+                                     composite_method = "median", idx_names = "NDVI",
+                                     file_path = tempfile(pattern="s2_composite_radius_df", tmpdir=tempdir()))
+
+# Read data frame
+s2_df_composite_radius <- fst::read_fst(s2_composite_radius_df)
+head(s2_df_composite_radius)
+```
+We can see that there are now several rows associated with FIRE_ID 170. 
+
+### July - No Temporal Compositing
+
+If we do not want apply a temporal composite over the time range, we can return all images that were acquired within the date range. If the region of interest spans over multiple Sentinel-2 L2A, geopipeline will still mosaic neighboring image tiles, as long as they were acquired on the same day. GeoTIFF files will be saved with the date of acquisition appended at the end. These files can be converted into raster data and stacked to create one large raster.
+
+In the case of data frames, only one data frame is returned with each column of the data frame having an associated date of acquisition.
+
+In this next example, we will run `s2_process` without applying a compositing function:
+
+```{r no_composites}
+# Polygon data
+s2_no_composite_im <- s2_process(sf_poly, start_dt = "2024-07-01", end_dt = "2024-07-31",
+                                 layers_sel = c("red", "nir"), 
+                                 composite_method = NULL, idx_names = "NDVI", 
+                                 file_path = tempfile(pattern="s2_no_composite_im", tmpdir=tempdir()))
+
+# Point data
+s2_no_composite_df <- s2_process(sf_point, start_dt = "2024-07-01", end_dt = "2024-07-31",
+                                 uniqueID = "FIRE_ID", layers_sel = c("red", "nir"), 
+                                 composite_method = NULL, idx_names = "NDVI",
+                                 file_path = tempfile(pattern="s2_no_composite_df", tmpdir=tempdir()))
+```
+
+Choosing to not apply a compositing funciton may be useful if you want to perform complex time series analysis later on, one that takes seasonal variation into account. 
+
+We will visualize the results now: 
+
+```{r plot_no_composites, echo=FALSE}
+# Plot
+terra::plot(terra::rast(s2_no_composite_im[1]))
+terra::plot(terra::rast(s2_no_composite_im[2]))
+```
+
+View the dataframe:
+
+```{r df_no_composite}
+# Data frame
+s2_df_no_composite <- fst::read_fst(s2_no_composite_df)
+head(s2_df_no_composite)
+```
+
+
