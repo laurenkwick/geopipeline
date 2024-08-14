@@ -40,7 +40,7 @@ Permian-Global-Research
 the foundation for accessing, processing, and calculating indices for
 the first 5 datasets listed above. That package is truly incredible and
 has made working on this project much easier! Additional functionality I
-have built on top of the `rsi` for the intended modeling use case of
+have built on top of `rsi` for the intended modeling use case of
 geopipeline includes:
 
 - Creating a data frame output for regions of interest based on point
@@ -52,8 +52,10 @@ geopipeline includes:
 Still to come:
 
 - A quick function for stacking and labeling non-composited images
+  covering the same spatial extent.
 - A function for summarizing pixel values within a buffer based on a
   user-defined formula.
+- Core functions for accessing GEDI L2A and L2B gridded datasets.
 
 ## Installation
 
@@ -67,26 +69,64 @@ devtools::install_github("laurenkwick/geopipeline")
 
 ## Example
 
-This is a basic example which shows you how to solve a common problem:
+Begin by loading example data. In this example, the region of interest
+is the George W Mead Wildlife Area in Wisconsin. The point data includes
+fires that recently occurred within the wildlife area.
 
 ``` r
 library(geopipeline)
-## basic example code
+
+sf_point <- sf::st_read("~/ProcessingModule/national_forest_data/mead_fires.shp")
+#> Reading layer `mead_fires' from data source 
+#>   `/home/lwick/ProcessingModule/national_forest_data/mead_fires.shp' 
+#>   using driver `ESRI Shapefile'
+#> Simple feature collection with 77 features and 25 fields
+#> Geometry type: POINT
+#> Dimension:     XY
+#> Bounding box:  xmin: 524429.1 ymin: 457321 xmax: 541478.1 ymax: 472452.7
+#> Projected CRS: NAD83(HARN) / Wisconsin Transverse Mercator
+sf_poly <- sf::st_read("~/ProcessingModule/national_forest_data/mead_boundary.shp", type = 3)
+#> Reading layer `mead_boundary' from data source 
+#>   `/home/lwick/ProcessingModule/national_forest_data/mead_boundary.shp' 
+#>   using driver `ESRI Shapefile'
+#> converted into: POLYGON
+#> Simple feature collection with 1 feature and 5 fields
+#> Geometry type: POLYGON
+#> Dimension:     XY
+#> Bounding box:  xmin: 515559.2 ymin: 454316.2 xmax: 542226.3 ymax: 474365.1
+#> Projected CRS: NAD83(HARN) / Wisconsin Transverse Mercator
 ```
 
-What is special about using `README.Rmd` instead of just `README.md`?
-You can include R chunks like so:
+We will use s2_process to return a GeoTIFF for the region of interest
+and a data frame containing values for our specific points of interest.
 
 ``` r
-summary(cars)
-#>      speed           dist       
-#>  Min.   : 4.0   Min.   :  2.00  
-#>  1st Qu.:12.0   1st Qu.: 26.00  
-#>  Median :15.0   Median : 36.00  
-#>  Mean   :15.4   Mean   : 42.98  
-#>  3rd Qu.:19.0   3rd Qu.: 56.00  
-#>  Max.   :25.0   Max.   :120.00
+# Polygon data
+s2_composite_im <- s2_process(sf_poly, start_dt = "2024-07-01", end_dt = "2024-07-31",
+                              layers_sel = c("red", "nir"), 
+                              composite_method = "median", idx_names = "NDVI", 
+                              file_path = tempfile(pattern="s2_composite_im", tmpdir=tempdir()))
+#> 1 indices were found based on criteria.
+#> File saved to: /tmp/RtmpXBUTm0/s2_composite_im7134191a97c_2024-07-01_2024-07-31.tif
+
+# Point data
+s2_composite_df <- s2_process(sf_point, start_dt = "2024-07-01", end_dt = "2024-07-31",
+                              uniqueID = "FIRE_ID",
+                              layers_sel = c("red", "nir"), 
+                              composite_method = "median", idx_names = "NDVI",
+                              file_path = tempfile(pattern="s2_composite_df", tmpdir=tempdir()))
+#> No radius defined. Will not apply a buffer to the point data.
+#> 1 indices were found based on criteria.
+#> File saved to: /tmp/RtmpXBUTm0/s2_composite_df713682d863c.fst
 ```
+
+Plot the image:
+
+``` r
+terra::plot(terra::rast(s2_composite_im))
+```
+
+<img src="man/figures/README-plot_composites-1.png" width="100%" />
 
 You’ll still need to render `README.Rmd` regularly, to keep `README.md`
 up-to-date. `devtools::build_readme()` is handy for this.
