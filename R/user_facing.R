@@ -1,3 +1,23 @@
+#' Sentinel-2 L2A Processing
+#'
+#' @param aoi_layer 
+#' @param radius 
+#' @param start_dt 
+#' @param end_dt 
+#' @param uniqueID 
+#' @param layers_sel 
+#' @param composite_method 
+#' @param resample_method 
+#' @param keep_SCL 
+#' @param apply_mask 
+#' @param app_domains 
+#' @param idx_names 
+#' @param file_path 
+#'
+#' @return
+#' @export
+#'
+#' @examples
 s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, layers_sel=NULL,
                        composite_method=c("median", "mean", "sum", "min", "max", NULL),
                        resample_method=c("bilinear", "average", "rms", "nearest", "gauss", "cube", "cubicspline", "lanczos", "average_magphase", "mode"),
@@ -92,7 +112,7 @@ s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, 
         if (i==1) {
           combined_df <- vals_df
         }
-        else {
+        else if (nrow(combined_df) == nrow(vals_df)){
           combined_df <- cbind(combined_df, vals_df[-1])
         }
       }
@@ -115,7 +135,7 @@ s2_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL, 
   return(file_list)
 }
 
-s1_image <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
+s1_process <- function(aoi_layer, radius=NULL, start_dt, end_dt, uniqueID=NULL,
                      composite_method=c("median", "mean", "sum", "min", "max", NULL),
                      resample_method=c("bilinear", "average", "rms", "nearest", "gauss", "cube", "cubicspline", "lanczos", "average_magphase", "mode"),
                      calc_dB=FALSE, app_domains=NULL, idx_names=NULL, file_path) {
