@@ -698,13 +698,13 @@ s1_dB <- function(raster, file_pth=NULL, counter=NULL) {
 check_bbox_area <- function(sf_object, max_area) {
 
   # Grab the bounding box of the AOI layer
-  bbox_aoi <- st_bbox(sf_object)
+  bbox_aoi <- sf::st_bbox(sf_object)
 
   # Convert bounding box to an sfc object
-  boundary <- st_as_sfc(bbox_aoi)
+  boundary <- sf::st_as_sfc(bbox_aoi)
 
   # Calculate the area of the object
-  area <- st_area(boundary)
+  area <- sf::st_area(boundary)
   area_sqm <- units::set_units(area, m^2)
 
   # Check if the area exceeds the max_area
